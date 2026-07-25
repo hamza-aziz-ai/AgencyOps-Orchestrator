@@ -1,23 +1,28 @@
 """HTTP surface.
 
-Three concerns only: trigger a workflow, inspect a run, release staged
-effects. Business logic lives in the graphs - this layer is transport.
+Four concerns only: trigger a workflow, inspect a run, release staged
+effects, and serve the review console. Business logic lives in the graphs -
+this layer is transport.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from ..config import get_settings
 from ..connectors import build_bundle
-from ..graphs.client_report import build_report_graph
-from ..graphs.creative_pipeline import build_creative_graph
+from ..graphs.client_report import CLIENT_LABELS, build_report_graph
+from ..graphs.creative_pipeline import build_creative_graph, clients_with_guidelines
 from ..llm import build_engine
 from ..observability import RunTrace
 from ..runstore import STORE, StoredRun
 from .schemas import CreativeRequest, DecisionRequest, ReportRequest
+
+CONSOLE_DIR = Path(__file__).resolve().parent / "static"
 
 app = FastAPI(
     title="AgencyOps Orchestrator",
@@ -30,6 +35,11 @@ app = FastAPI(
 )
 
 
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    return RedirectResponse("/console/")
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     s = get_settings()
@@ -39,6 +49,16 @@ def health() -> dict[str, Any]:
         "llm_engine": build_engine(s).name,
         "human_approval_required": s.require_human_approval,
     }
+
+
+@app.get("/clients")
+def clients() -> list[dict[str, Any]]:
+    """The client roster the console offers, and what each one can run."""
+    creative_ready = set(clients_with_guidelines())
+    return [
+        {"slug": slug, "name": name, "creative_enabled": slug in creative_ready}
+        for slug, name in sorted(CLIENT_LABELS.items(), key=lambda kv: kv[1])
+    ]
 
 
 @app.post("/workflows/client-report")
@@ -77,7 +97,15 @@ def client_report(req: ReportRequest) -> dict[str, Any]:
             bundle=bundle,
             trace=trace,
             label=state.get("client_name", req.client),
-            artifacts={"report_markdown": state.get("report_markdown", "")},
+            # Artifacts are what a reviewer needs to re-open the run cold, so
+            # the computed figures travel with the document rather than only
+            # in the response to whoever triggered it.
+            artifacts={
+                "report_markdown": state.get("report_markdown", ""),
+                "totals": state.get("totals"),
+                "deltas": state.get("deltas"),
+                "findings": state.get("findings", []),
+            },
         )
     )
     return {
@@ -121,6 +149,11 @@ def creative(req: CreativeRequest) -> dict[str, Any]:
             bundle=bundle,
             trace=trace,
             label=f"{req.client} / {req.product}",
+            artifacts={
+                "approved_variants": state.get("approved_variants", []),
+                "rejected_variants": state.get("rejected_variants", []),
+                "revision_rounds": state.get("revision_round", 0),
+            },
         )
     )
     return {
@@ -166,3 +199,13 @@ def decide(run_id: str, req: DecisionRequest) -> dict[str, Any]:
     except IndexError:
         raise HTTPException(status_code=400, detail="effect_indexes out of range") from None
     return {**result, **STORE.get(run_id).summary()}
+
+
+# --------------------------------------------------------------------------
+# Review console
+#
+# Mounted last so it cannot shadow an API route. Plain files, no build step:
+# the console has to run on the same terms as everything else - no npm, no
+# CDN, no credentials.
+# --------------------------------------------------------------------------
+app.mount("/console", StaticFiles(directory=CONSOLE_DIR, html=True), name="console")

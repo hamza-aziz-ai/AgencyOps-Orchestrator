@@ -61,6 +61,31 @@ Graphs never import from `connectors.live` or `connectors.mock`. They receive a
 - Live/mock selection is one branch in `build_bundle()`
 - Adding WhatsApp means adding a `WriteConnector` subclass; no graph changes
 
+## The console is a client, not a layer
+
+```
+browser ──▶ /health /clients /workflows/* /runs/* ──▶ same FastAPI process
+```
+
+The review console holds no state the server does not already own. It renders
+figures computed in `analysis.py`, statuses read from `StoredRun.summary()`, and
+documents produced by the `assemble` node — it derives nothing. Two consequences
+worth the constraint:
+
+- A refresh cannot produce a different answer than the API would. There is no
+  cache to go stale and no client-side copy of the truth to drift.
+- Everything the console can do, `curl` can do. The UI is a convenience over
+  the approval gate, never a second path through it.
+
+This is why `/runs/{id}` returns artifacts rather than only effects: a reviewer
+opening a run cold needs the report and the generated copy, and the alternative
+— replaying the workflow to rebuild them — would mean re-running an LLM to
+render a page.
+
+No build step, deliberately. An agency inherits this codebase; a console its
+team can open in an editor and change is worth more than one that needs a
+toolchain resurrected first.
+
 ## The dispatcher as a chokepoint
 
 Exactly one node per graph is permitted to cause side effects, and it only

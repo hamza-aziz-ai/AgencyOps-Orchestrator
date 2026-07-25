@@ -32,6 +32,15 @@ class RunSummary(BaseModel):
     workflow: str
     label: str
     status: str
+    started_at: str
     pending_approval: bool
     effects: list[dict[str, Any]]
     errors: list[str]
+
+
+class ClientSummary(BaseModel):
+    slug: str
+    name: str
+    creative_enabled: bool = Field(
+        ..., description="Whether brand guidelines exist, gating the creative pipeline."
+    )

@@ -76,3 +76,34 @@ def test_trace_exposed_on_run():
 
 def test_missing_run_404():
     assert client.get("/runs/deadbeef").status_code == 404
+
+
+# --------------------------------------------------------------------------
+# Console surface
+# --------------------------------------------------------------------------
+def test_client_roster_flags_creative_availability():
+    roster = client.get("/clients").json()
+    slugs = {c["slug"] for c in roster}
+    assert {"nova-retail", "atlas-fitness"} <= slugs
+    assert all(c["creative_enabled"] for c in roster if c["slug"] in slugs)
+
+
+def test_run_summary_carries_start_time():
+    run = client.post("/workflows/client-report", json={"client": "nova-retail"}).json()
+    assert run["started_at"]
+
+
+def test_creative_variants_survive_a_cold_reload():
+    """A reviewer opening the run later must see the copy, not just the effects."""
+    run = client.post("/workflows/creative", json={
+        "client": "nova-retail", "product": "Nova Winter Edit",
+        "audience": "returning customers", "key_benefit": "next-day delivery",
+    }).json()
+    artifacts = client.get(f"/runs/{run['run_id']}").json()["artifacts"]
+    assert artifacts["approved_variants"] == run["approved_variants"]
+
+
+def test_console_is_served():
+    body = client.get("/console/").text
+    assert "AgencyOps" in body
+    assert client.get("/", follow_redirects=False).status_code in (307, 308)

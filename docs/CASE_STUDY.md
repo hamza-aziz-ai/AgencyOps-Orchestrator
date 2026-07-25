@@ -104,6 +104,28 @@ POST /runs/{id}/decision {"decision":"approve","effect_indexes":[0]}
 
 This is the piece a Zapier chain structurally cannot provide.
 
+### The console the gate is actually used through
+
+An approval gate that only exists as a `curl` command is an approval gate the
+account team routes around. The same process serves a review console: what is
+staged, what each write would do, which ones cannot be undone, and a checkbox
+per effect so a lead can send the client report while holding the internal
+action cards.
+
+It is plain HTML, CSS and JavaScript — no npm, no bundler, no CDN. That is the
+same argument as the offline LLM engine, applied to the front end: the agency
+inherits this, and a console their team can open in an editor and change beats
+one that needs a toolchain resurrected first. It derives nothing either — every
+figure on screen was computed in Python and every status came from the server,
+so the screen cannot disagree with the system about what was sent.
+
+Accessibility was treated as part of the deliverable rather than a polish pass:
+labelled controls with an error summary that links to the offending field, one
+polite live region instead of toasts that vanish before they can be read, focus
+moved deliberately on navigation, a native `<dialog>` for the irreversible-send
+confirmation so focus trapping comes from the platform, status carried by text
+rather than colour, and both themes clearing WCAG AA contrast.
+
 ### The bounded revision loop
 
 The creative pipeline scores generated ad copy against machine-checkable brand
@@ -138,7 +160,7 @@ garbage.
 **Deterministic offline LLM engine.**
 Behind the same interface as Gemini sits an engine that produces genuine,
 data-grounded output with no API key. This is not a test mock. It makes the
-demo runnable anywhere, the 48-test suite deterministic and free, and — the
+demo runnable anywhere, the 52-test suite deterministic and free, and — the
 actual production argument — it means an LLM outage degrades reporting to
 templated prose instead of taking client reporting offline entirely.
 
@@ -166,7 +188,7 @@ the answer is on disk and readable without a subscription.
 | | |
 |---|---|
 | Workflows | 2 end-to-end (reporting, creative production) |
-| Test suite | 48 tests, all passing |
+| Test suite | 52 tests, all passing |
 | External writes made without approval | 0 — asserted by test |
 | Runs with no credentials | Full demo + entire suite |
 | Connectors | 4 (Meta Ads, Harvest, Slack, Trello) — mock + live |

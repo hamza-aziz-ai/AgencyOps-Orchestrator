@@ -41,6 +41,7 @@ class StoredRun:
             "workflow": self.workflow,
             "label": self.label,
             "status": self.trace.status,
+            "started_at": self.trace.started_at,
             "pending_approval": self.pending_approval,
             "effects": [
                 {

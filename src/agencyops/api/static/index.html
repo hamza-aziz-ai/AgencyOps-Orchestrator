@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgencyOps Orchestrator — Console</title>
+<meta name="description" content="Run, review and release agency automation workflows.">
+<link rel="stylesheet" href="app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>">
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to main content</a>
+
+<header class="app-header">
+  <div class="shell app-header__inner">
+    <div class="brand">
+      <span class="brand__mark" aria-hidden="true">AO</span>
+      <span class="brand__text">
+        <strong>AgencyOps</strong>
+        <span class="brand__sub">Orchestrator console</span>
+      </span>
+    </div>
+
+    <div class="app-header__meta">
+      <dl class="env" id="env-strip" aria-label="Environment">
+        <div class="env__item"><dt>Connectors</dt><dd id="env-connectors">—</dd></div>
+        <div class="env__item"><dt>LLM engine</dt><dd id="env-engine">—</dd></div>
+        <div class="env__item"><dt>Approval gate</dt><dd id="env-gate">—</dd></div>
+      </dl>
+      <button type="button" id="theme-toggle" class="btn btn--ghost btn--sm" aria-pressed="false">
+        Dark theme
+      </button>
+    </div>
+  </div>
+
+  <nav class="tabs shell" aria-label="Sections">
+    <ul class="tabs__list">
+      <li><a class="tabs__link" href="#/dashboard" data-route="dashboard">Overview</a></li>
+      <li><a class="tabs__link" href="#/run" data-route="run">Run a workflow</a></li>
+      <li>
+        <a class="tabs__link" href="#/approvals" data-route="approvals">
+          Approvals <span class="pill" id="pending-count" hidden></span>
+        </a>
+      </li>
+      <li><a class="tabs__link" href="#/runs" data-route="runs">Run history</a></li>
+    </ul>
+  </nav>
+</header>
+
+<div class="statusbar shell" id="statusbar" role="status" aria-live="polite" hidden></div>
+
+<main id="main" class="shell" tabindex="-1">
+  <noscript>
+    <div class="callout callout--warn">
+      <h1>JavaScript required</h1>
+      <p>
+        This console talks to the orchestrator over its HTTP API and needs JavaScript.
+        The same operations are available directly at
+        <a href="/docs">/docs</a>.
+      </p>
+    </div>
+  </noscript>
+  <div id="view" aria-busy="true">
+    <p class="muted">Loading console…</p>
+  </div>
+</main>
+
+<footer class="app-footer shell">
+  <p>
+    Every outbound write is staged as a reviewable effect and halts here until a
+    human releases it. <a href="/docs">API reference</a>.
+  </p>
+</footer>
+
+<dialog id="confirm-dialog" class="dialog" aria-labelledby="confirm-title">
+  <form method="dialog">
+    <h2 id="confirm-title" class="dialog__title">Confirm</h2>
+    <div id="confirm-body" class="dialog__body"></div>
+    <div class="dialog__actions">
+      <button value="cancel" class="btn btn--ghost">Cancel</button>
+      <button value="confirm" class="btn btn--danger" id="confirm-ok">Send now</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+# Runtime and test dependencies. Nothing here requires credentials or network
+# access at import time — the offline path is the default path.
+#
+# Deliberately absent: google-genai. The Gemini engine imports it lazily, so an
+# install without it still runs every workflow through OfflineEngine.
+# Install it only when you set GEMINI_API_KEY:  pip install google-genai
+
+langgraph>=1.2,<2
+fastapi>=0.140,<1
+uvicorn>=0.51,<1
+pydantic>=2.13,<3
+pydantic-settings>=2.14,<3
+httpx>=0.28,<1
+python-dotenv>=1.2,<2
+
+pytest>=9.1,<10

@@ -36,6 +36,15 @@ MAX_REVISION_ROUNDS = 2
 PASS_THRESHOLD = 80
 
 
+def clients_with_guidelines() -> list[str]:
+    """Clients this pipeline can run for at all.
+
+    Copy generation without a brand rule set is exactly the ungoverned output
+    this workflow exists to prevent, so the console offers only these.
+    """
+    return sorted(json.loads(GUIDELINES_PATH.read_text()))
+
+
 # --------------------------------------------------------------------------
 # Scoring - deterministic, no LLM
 # --------------------------------------------------------------------------

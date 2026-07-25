@@ -10,7 +10,8 @@ releasing it.**
 
 ```
 $ python scripts/demo.py          # no API keys required
-$ python -m pytest -q             # 48 passed
+$ python -m pytest -q             # 52 passed
+$ uvicorn agencyops.api.main:app --app-dir src   # console at localhost:8000
 ```
 
 ---
@@ -147,6 +148,40 @@ flagged as such in the review list.
 
 ---
 
+## The review console
+
+The gate is only as good as the interface in front of it, and the people using
+it are account leads, not engineers. So the same FastAPI process serves a
+console at `/console/`:
+
+| View | What it is for |
+|---|---|
+| Overview | What mode this instance is in, and how many writes are staged |
+| Run a workflow | Trigger either workflow with validated inputs |
+| Approvals | The queue — per-effect checkboxes, irreversible writes flagged, release all or part of a run |
+| Run history | Full node-by-node trace, the rendered report, the generated copy with its brand scores |
+
+Plain HTML, CSS and JavaScript — no npm, no bundler, no CDN. That is a
+deliberate constraint rather than a shortcut: the console runs on the same terms
+as the rest of the project (no credentials, no network, one process), and an
+agency's internal team can read and edit it without a toolchain.
+
+It is transport, like the API layer. No logic lives in the browser: every figure
+it displays was computed in `analysis.py`, and every status it shows comes from
+the server. A refresh re-reads `/runs`, so the console can never disagree with
+the orchestrator about what was sent.
+
+**Accessibility** is treated as part of the deliverable, not a polish pass:
+semantic landmarks and a skip link; a heading order that survives an audit;
+labelled controls with an error summary that links to the offending field;
+one polite live region for status rather than toasts that vanish before they can
+be read; focus moved to `<main>` on navigation; a native `<dialog>` for the
+irreversible-send confirmation, so focus trapping and Escape come from the
+platform; status carried by text, never by colour alone; light and dark themes
+both clearing WCAG AA contrast; and `prefers-reduced-motion` honoured.
+
+---
+
 ## Running it
 
 ```bash
@@ -154,11 +189,12 @@ pip install -r requirements.txt
 cp .env.example .env          # optional — defaults run fully offline
 
 python scripts/demo.py        # both workflows, narrated
-python -m pytest -q           # 48 tests
+python -m pytest -q           # 52 tests
 uvicorn agencyops.api.main:app --reload --app-dir src
 ```
 
-Then open http://localhost:8000/docs.
+Then open http://localhost:8000 for the console, or
+http://localhost:8000/docs for the API.
 
 ### Three run modes, one build
 
@@ -180,11 +216,13 @@ reporting to templated prose instead of taking it down.
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/health` | Active connector mode, LLM engine, gate status |
+| `GET` | `/clients` | Client roster, and which can run the creative pipeline |
 | `POST` | `/workflows/client-report` | Run reporting; returns staged effects |
 | `POST` | `/workflows/creative` | Run creative pipeline |
 | `GET` | `/runs` · `/runs/{id}` | Run list and full trace |
 | `GET` | `/runs/{id}/report` | Rendered markdown report |
 | `POST` | `/runs/{id}/decision` | Approve or reject staged effects |
+| `GET` | `/console/` | The review console |
 
 ---
 
@@ -206,7 +244,8 @@ src/agencyops/
     client_report.py reporting workflow
     creative_pipeline.py  creative workflow with the revision loop
   api/               FastAPI transport layer
-tests/               48 tests
+    static/          the review console — hand-written HTML, CSS, JS
+tests/               52 tests
 scripts/demo.py      narrated end-to-end run
 ```
 
@@ -219,8 +258,13 @@ Honest scope boundaries for a prototype:
 - **No durable checkpointer.** Paused runs live in memory. LangGraph's
   Postgres checkpointer drops into `build_*_graph()` without touching node
   code — the graphs are already written as pure state transitions.
-- **No auth on the API.** It assumes a trusted network. Production needs
-  workspace-scoped tokens, since the approval gate is a security boundary.
+- **No auth on the API or the console.** Both assume a trusted network.
+  Production needs workspace-scoped tokens and a signed-in reviewer, since the
+  approval gate is a security boundary and "who released this?" is an audit
+  question the trace cannot currently answer.
+- **The console has no realtime channel.** Workflows run synchronously and the
+  console re-reads `/runs` after every action. Two reviewers working the queue
+  at once would not see each other's decisions until they refreshed.
 - **Live connectors are wired but unexercised.** They implement the same
   protocols and are covered by the type contracts, not by integration tests
   against real accounts.
