@@ -10,7 +10,7 @@ releasing it.**
 
 ```
 $ python scripts/demo.py          # no API keys required
-$ python -m pytest -q             # 65 passed
+$ python -m pytest -q             # 101 passed
 $ uvicorn agencyops.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -39,7 +39,9 @@ dispatcher executes them, and only after approval.
                     ┌─────────────────────────────────────────────┐
    FastAPI  ──────▶ │              LangGraph workflows            │
                     │                                             │
-                    │  gather → analyse → narrate → assemble      │
+                    │  gather → analyse → narrate ⇄ verify        │
+                    │                              ↓              │
+                    │                          assemble           │
                     │                              ↓              │
                     │                          propose            │
                     │                         ╱        ╲          │
@@ -60,6 +62,7 @@ dispatcher executes them, and only after approval.
 | `gather` | I/O against connectors | Any logic |
 | `analyse` | Deterministic maths | Call an LLM |
 | `narrate` | Call an LLM | Compute a number |
+| `verify` | Check prose against the maths | Call an LLM, or rewrite anything |
 | `propose` | Construct `Effect`s | Execute anything |
 | `dispatch` | Mutate external systems | Anything else |
 
@@ -71,14 +74,14 @@ exactly that (`test_effects_are_inert_until_dispatched`).
 ## Workflow 1 — Weekly client reporting
 
 ```
-gather → analyse → narrate → assemble → propose → [approval gate] → dispatch
+gather → analyse → narrate ⇄ verify → assemble → propose → [approval gate] → dispatch
 ```
 
 Pulls Meta Ads performance and Harvest time tracking, computes week-on-week
 deltas, ranks material findings by severity and revenue impact, has the LLM
-write client commentary grounded strictly in those computed figures, renders a
-markdown report, and stages a Slack post plus one Trello action card per
-high-severity finding.
+write client commentary grounded strictly in those computed figures, checks
+that commentary back against the arithmetic, renders a markdown report, and
+stages a Slack post plus one Trello action card per high-severity finding.
 
 Sample trace:
 
@@ -87,14 +90,39 @@ run 136b01f06555  [client_report]  status=blocked_on_approval
    1. gather              0.1ms  3 campaigns, 5 time entries
    2. analyse             0.1ms  4 findings (2 high severity)
    3. narrate             0.0ms  narrative via offline (865 chars)
-   4. assemble            0.0ms  report assembled (45 lines)
-   5. propose             0.0ms  3 effects staged, none executed
-   6. await_approval      0.0ms  paused - 3 effects awaiting human approval
+   4. verify              0.0ms  commentary signs agree with the computed figures
+   5. assemble            0.0ms  report assembled (45 lines)
+   6. propose             0.0ms  3 effects staged, none executed
+   7. await_approval      0.0ms  paused - 3 effects awaiting human approval
 ```
 
 **Materiality thresholds** keep the report readable: movements under 10%, or on
 campaigns spending under AED 2,000, are treated as noise and never surface. An
 agency automation that flags everything gets ignored within a fortnight.
+
+### The sign check
+
+`verify` exists because a prompt cannot make a guarantee. The model is handed
+every figure pre-computed, with the direction and the judgement in separate
+columns, and told to reproduce the signs exactly. It still occasionally printed
+one inverted — a rising cost is bad news, and a minus sign is how prose usually
+signals bad news:
+
+> CPA up to AED 70 **(‑16%)** — while the table two lines above says **+16%**
+
+A client who catches the prose and the table disagreeing stops trusting both.
+So the claim is enforced rather than requested. `verify` compares what the
+commentary printed against what `compare()` computed, a disagreement earns one
+retry with the specific violation attached, and copy that still contradicts the
+figures is replaced by the offline engine's templated prose. The trace records
+that it happened and why.
+
+It checks characters, not verbs: an explicit sign in front of a magnitude,
+across every dash variant a model might reach for — the observed failure used
+U+2011, a non-breaking hyphen an ASCII check would have missed. Where two
+metrics share a magnitude in opposite directions the figure is skipped rather
+than guessed at. **A gate that cries wolf gets switched off, and then it
+protects nothing.**
 
 ---
 
@@ -189,7 +217,7 @@ pip install -r requirements.txt
 cp .env.example .env          # optional — defaults run fully offline
 
 python scripts/demo.py        # both workflows, narrated
-python -m pytest -q           # 65 tests
+python -m pytest -q           # 101 tests
 uvicorn agencyops.api.main:app --reload --app-dir src
 ```
 
@@ -270,7 +298,7 @@ src/agencyops/
     creative_pipeline.py  creative workflow with the revision loop
   api/               FastAPI transport layer
     static/          the review console — hand-written HTML, CSS, JS
-tests/               65 tests
+tests/               101 tests
 scripts/demo.py      narrated end-to-end run
 ```
 

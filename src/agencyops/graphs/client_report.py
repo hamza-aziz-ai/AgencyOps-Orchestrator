@@ -1,6 +1,6 @@
 """Weekly client reporting workflow.
 
-    gather -> analyse -> narrate -> assemble -> propose -> [approval gate] -> dispatch
+    gather -> analyse -> narrate ⇄ verify -> assemble -> propose -> [gate] -> dispatch
 
 Why a graph rather than a linear script: the approval gate is a real
 interrupt. The graph halts with the report drafted and the outbound writes
@@ -11,12 +11,23 @@ Node responsibilities are strictly separated:
   gather   - I/O only, no logic
   analyse  - deterministic maths, no LLM
   narrate  - LLM only, no maths
+  verify   - deterministic maths, no LLM, and no power to rewrite
   propose  - builds Effects, executes nothing
   dispatch - the only node permitted to cause side effects
+
+`verify` exists because prompting alone cannot make a guarantee. The model is
+handed every figure pre-computed and told to reproduce the signs exactly; it
+still occasionally prints one inverted, because a rising cost is bad news and
+a minus sign is how prose usually signals bad news. So the claim is enforced
+rather than requested: the commentary is checked against the arithmetic, a
+disagreement earns one corrected retry, and copy that still contradicts the
+figures is replaced by the offline engine's templated prose. Same shape as the
+creative pipeline's brand check - machine-checkable rule, specific violations
+fed back, bounded rounds, deterministic floor.
 """
 from __future__ import annotations
 
-import time
+import re
 from typing import Any, Literal
 
 from langgraph.graph import END, StateGraph
@@ -25,11 +36,72 @@ from ..analysis import aggregate, compare, find_signals
 from ..config import Settings, get_settings
 from ..connectors import ConnectorBundle, build_bundle
 from ..connectors.base import Effect
-from ..llm import LLMEngine, build_engine
+from ..llm import LLMEngine, OfflineEngine, build_engine
 from ..observability import RunTrace, timed
 from .state import ReportState
 
 CLIENT_LABELS = {"nova-retail": "Nova Retail", "atlas-fitness": "Atlas Fitness"}
+
+# One corrective pass. If the model cannot reproduce a sign it was handed
+# twice, another attempt is not the answer - the offline engine is.
+MAX_NARRATION_ROUNDS = 1
+
+# Every dash-like character a model might print in front of a percentage.
+# The observed failure used U+2011, a non-breaking hyphen, which an
+# ASCII-only check would have missed entirely.
+_DASHES = "-‐‑‒–—−"
+
+
+def _magnitudes(pct: float) -> set[str]:
+    """The ways a model might render this figure: 9.02%, 9.0%, 9%."""
+    return {f"{abs(pct):.2f}", f"{abs(pct):.1f}", f"{abs(pct):.0f}"}
+
+
+def find_sign_violations(narrative: str, deltas: dict[str, Any]) -> list[str]:
+    """Report every percentage the prose printed with the wrong sign.
+
+    Deterministic, text-only, and incapable of repair: it compares what the
+    commentary printed against what `compare()` computed, and says so. Keeping
+    it unable to rewrite anything is what makes it usable as a gate - a checker
+    that also fixes has no independent opinion left to trust.
+
+    Scope is explicit signs only. A wrong *verb* on an unsigned figure ("CPA
+    fell 9.02%") is the same class of error, but detecting it means attributing
+    a verb to a metric across arbitrary sentence structure, and a gate that
+    cries wolf gets switched off. The prompt supplies the verb; this catches
+    the character.
+    """
+    metrics = {
+        key[:-4]: float(value)
+        for key, value in deltas.items()
+        if key.endswith("_pct") and value is not None
+    }
+
+    # A magnitude two metrics share in opposite directions cannot be pinned to
+    # either from the text alone. Skipping it is the honest outcome; guessing
+    # would put false failures in front of a human until they stopped reading.
+    seen: dict[str, set[bool]] = {}
+    for pct in metrics.values():
+        if pct:
+            for mag in _magnitudes(pct):
+                seen.setdefault(mag, set()).add(pct > 0)
+
+    violations: list[str] = []
+    for metric, pct in sorted(metrics.items()):
+        if not pct:
+            continue
+        for mag in sorted(_magnitudes(pct)):
+            if len(seen.get(mag, ())) != 1:
+                continue
+            pattern = rf"([{_DASHES}+])\s?{re.escape(mag)}\s?%"
+            match = re.search(pattern, narrative)
+            if match and (match.group(1) == "+") != (pct > 0):
+                violations.append(
+                    f"{metric} moved {pct:+.2f}% but the commentary prints "
+                    f"'{match.group(0).strip()}'"
+                )
+                break
+    return violations
 
 
 def build_report_graph(
@@ -76,26 +148,53 @@ def build_report_graph(
         return {"totals": totals, "deltas": deltas, "findings": findings}
 
     def narrate(state: ReportState) -> dict[str, Any]:
-        trace, retainer = state["trace"], state.get("retainer")
-        with timed(trace, "narrate") as t:
-            context = {
-                "client_name": state["client_name"],
-                "totals": state["totals"],
-                "deltas": state["deltas"],
-                "findings": state["findings"],
-                "currency": state["totals"].get("currency", "AED"),
-                "retainer": {
-                    "used_hours": retainer.used_hours if retainer else 0,
-                    "contracted_hours": retainer.contracted_hours if retainer else 0,
-                    "utilisation": retainer.utilisation if retainer else 0,
-                    "over_budget": retainer.over_budget if retainer else False,
-                },
-            }
+        trace = state["trace"]
+        rnd = state.get("narration_round", 0) + 1
+        with timed(trace, "narrate" if rnd == 1 else f"narrate_retry_{rnd - 1}") as t:
+            context = _narrative_context(state)
             prompt = _narrative_prompt(context)
+            corrections = state.get("sign_violations") or []
+            if corrections:
+                prompt = f"{prompt}\n\n{_correction_block(corrections)}"
             resp = engine.complete("report_narrative", prompt, context)
             t.summary = f"narrative via {resp.engine} ({len(resp.text)} chars)"
-            t.detail = {"engine": resp.engine}
-        return {"narrative": resp.text}
+            t.detail = {"engine": resp.engine, "corrections_fed_back": len(corrections)}
+        # Clear the violations the retry was given; verify decides afresh.
+        return {"narrative": resp.text, "narration_round": rnd, "sign_violations": []}
+
+    def verify(state: ReportState) -> dict[str, Any]:
+        """Check the prose against the arithmetic. Reports, never repairs."""
+        trace = state["trace"]
+        with timed(trace, "verify") as t:
+            violations = find_sign_violations(state["narrative"], state["deltas"])
+            t.summary = (
+                "commentary signs agree with the computed figures"
+                if not violations
+                else f"{len(violations)} figure(s) printed with the wrong sign"
+            )
+            t.detail = {"violations": violations}
+        return {"sign_violations": violations}
+
+    def fallback_narrative(state: ReportState) -> dict[str, Any]:
+        """Last resort: templated prose that cannot disagree with the maths.
+
+        Reached only when the model contradicted figures it was handed, twice.
+        Losing the richer commentary is the cheaper failure - a client who
+        catches the prose and the table disagreeing stops trusting both.
+        """
+        trace = state["trace"]
+        with timed(trace, "fallback_narrative") as t:
+            context = _narrative_context(state)
+            resp = OfflineEngine().complete("report_narrative", "", context)
+            t.summary = (
+                f"model output rejected after {state.get('narration_round', 0)} "
+                f"attempt(s); using deterministic commentary"
+            )
+            t.detail = {
+                "engine": resp.engine,
+                "rejected_violations": state.get("sign_violations", []),
+            }
+        return {"narrative": resp.text, "sign_violations": []}
 
     def assemble(state: ReportState) -> dict[str, Any]:
         trace = state["trace"]
@@ -169,6 +268,15 @@ def build_report_graph(
     def after_gather(state: ReportState) -> Literal["analyse", "__end__"]:
         return "__end__" if state.get("errors") else "analyse"
 
+    def after_verify(state: ReportState) -> Literal["narrate", "fallback_narrative", "assemble"]:
+        """Clean prose ships; wrong signs get one corrected retry, then the
+        deterministic engine. Bounded by MAX_NARRATION_ROUNDS."""
+        if not state.get("sign_violations"):
+            return "assemble"
+        if state.get("narration_round", 0) > MAX_NARRATION_ROUNDS:
+            return "fallback_narrative"
+        return "narrate"
+
     def after_propose(state: ReportState) -> Literal["dispatch", "await_approval"]:
         return "await_approval" if state.get("approval_required") else "dispatch"
 
@@ -177,6 +285,8 @@ def build_report_graph(
     g.add_node("gather", gather)
     g.add_node("analyse", analyse)
     g.add_node("narrate", narrate)
+    g.add_node("verify", verify)
+    g.add_node("fallback_narrative", fallback_narrative)
     g.add_node("assemble", assemble)
     g.add_node("propose", propose)
     g.add_node("dispatch", dispatch)
@@ -185,7 +295,17 @@ def build_report_graph(
     g.set_entry_point("gather")
     g.add_conditional_edges("gather", after_gather, {"analyse": "analyse", "__end__": END})
     g.add_edge("analyse", "narrate")
-    g.add_edge("narrate", "assemble")
+    g.add_edge("narrate", "verify")
+    g.add_conditional_edges(
+        "verify",
+        after_verify,
+        {
+            "narrate": "narrate",              # the loop, bounded above
+            "fallback_narrative": "fallback_narrative",
+            "assemble": "assemble",
+        },
+    )
+    g.add_edge("fallback_narrative", "assemble")
     g.add_edge("assemble", "propose")
     g.add_conditional_edges(
         "propose", after_propose, {"dispatch": "dispatch", "await_approval": "await_approval"}
@@ -237,6 +357,38 @@ def _movement_table(deltas: dict[str, Any]) -> str:
             note = "  worse than last week"
         rows.append(f"  {metric:<12}{pct:+.2f}%  {verb}{note}")
     return "\n".join(rows)
+
+
+def _narrative_context(state: ReportState) -> dict[str, Any]:
+    """Everything the prose is allowed to be about. Shared by every node that
+    generates commentary, so the retry and the fallback cannot drift from the
+    figures the first attempt was given."""
+    retainer = state.get("retainer")
+    return {
+        "client_name": state["client_name"],
+        "totals": state["totals"],
+        "deltas": state["deltas"],
+        "findings": state["findings"],
+        "currency": state["totals"].get("currency", "AED"),
+        "retainer": {
+            "used_hours": retainer.used_hours if retainer else 0,
+            "contracted_hours": retainer.contracted_hours if retainer else 0,
+            "utilisation": retainer.utilisation if retainer else 0,
+            "over_budget": retainer.over_budget if retainer else False,
+        },
+    }
+
+
+def _correction_block(violations: list[str]) -> str:
+    listed = "\n".join(f"- {v}" for v in violations)
+    return (
+        "YOUR PREVIOUS DRAFT CONTRADICTED THE COMPUTED FIGURES\n"
+        f"{listed}\n"
+        "Rewrite the commentary. Keep the analysis and the recommendations; "
+        "correct the signs so they match the movement table above. A figure "
+        "that rose keeps its + sign even when rising is the bad outcome - say "
+        "in words that it is worse."
+    )
 
 
 def _narrative_prompt(ctx: dict[str, Any]) -> str:

@@ -52,9 +52,13 @@ def test_unknown_client_short_circuits_without_side_effects(settings, bundle, en
 
 
 def test_trace_records_every_node(settings, bundle, engine):
+    """The happy path: prose passes the sign check first time, so neither the
+    retry nor the deterministic fallback appears."""
     s = run_report("nova-retail", bundle=bundle, engine=engine, settings=settings)
     nodes = [step.node for step in s["trace"].steps]
-    assert nodes == ["gather", "analyse", "narrate", "assemble", "propose", "await_approval"]
+    assert nodes == [
+        "gather", "analyse", "narrate", "verify", "assemble", "propose", "await_approval",
+    ]
 
 
 def test_healthy_client_reports_fewer_problems(settings, bundle, engine):

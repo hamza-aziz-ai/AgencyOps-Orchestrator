@@ -160,7 +160,7 @@ garbage.
 **Deterministic offline LLM engine.**
 Behind the same interface as the model providers sits an engine that produces genuine,
 data-grounded output with no API key. This is not a test mock. It makes the
-demo runnable anywhere, the 65-test suite deterministic and free, and — the
+demo runnable anywhere, the 101-test suite deterministic and free, and — the
 actual production argument — it means an LLM outage degrades reporting to
 templated prose instead of taking client reporting offline entirely.
 
@@ -188,7 +188,7 @@ the answer is on disk and readable without a subscription.
 | | |
 |---|---|
 | Workflows | 2 end-to-end (reporting, creative production) |
-| Test suite | 65 tests, all passing |
+| Test suite | 101 tests, all passing |
 | External writes made without approval | 0 — asserted by test |
 | Runs with no credentials | Full demo + entire suite |
 | Connectors | 4 (Meta Ads, Harvest, Slack, Trello) — mock + live |

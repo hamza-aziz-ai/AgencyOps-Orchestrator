@@ -29,6 +29,10 @@ class ReportState(TypedDict, total=False):
     deltas: dict[str, Any]
     findings: Annotated[list[dict[str, Any]], _append]
     narrative: str
+    # Replaced wholesale each round, not accumulated: the current verdict on
+    # the current draft is the only one that means anything.
+    sign_violations: list[str]
+    narration_round: int
     report_markdown: str
 
     # governance
