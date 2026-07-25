@@ -12,7 +12,9 @@ import pytest
 
 from agencyops.graphs.client_report import (
     MAX_NARRATION_ROUNDS,
+    find_narrative_violations,
     find_sign_violations,
+    find_verb_violations,
     run_report,
 )
 from agencyops.llm import LLMResponse
@@ -99,6 +101,80 @@ def test_missing_and_null_deltas_do_not_crash():
 
 
 # --------------------------------------------------------------------------
+# Verb direction
+# --------------------------------------------------------------------------
+def test_a_wrong_verb_on_an_unsigned_figure_is_caught():
+    """The other half of the sign bug: right number, wrong direction."""
+    v = find_verb_violations("CPA fell 9.02% to AED 61.51.", DELTAS)
+    assert len(v) == 1
+    assert "cpa" in v[0] and "+9.02%" in v[0] and "falling" in v[0]
+
+
+def test_a_fall_described_as_a_rise_is_caught():
+    assert find_verb_violations("ROAS climbed 8.23% to 5.84.", DELTAS)
+
+
+def test_a_verb_bound_by_a_preposition_is_caught():
+    """'the drop in CPA of 9.02%' - the verb sits before the metric."""
+    assert find_verb_violations("The drop in CPA of 9.02% helped margins.", DELTAS)
+
+
+def test_correct_prose_passes():
+    good = ("Spend rose 5.99% to AED 70,800, but revenue fell 2.73%. "
+            "ROAS fell 8.23% while CPA rose 9.02%.")
+    assert find_verb_violations(good, DELTAS) == []
+
+
+def test_a_verb_is_not_stolen_from_the_previous_clause():
+    """'spend rose ... but revenue fell': the nearest earlier verb belongs to
+    spend, so a bare one before a metric must not bind to it."""
+    assert find_verb_violations("Spend rose 5.99% but revenue fell 2.73%.", DELTAS) == []
+
+
+def test_a_verb_is_not_stolen_from_the_following_clause():
+    """'the dip in conversions ... and the rise in CPA' must not read as a
+    claim that conversions rose."""
+    text = ("The dip in conversions of 2.79% and the rise in CPA of 9.02% "
+            "together squeeze margin.")
+    assert find_verb_violations(text, DELTAS) == []
+
+
+def test_campaign_level_movement_is_not_judged_against_account_totals():
+    """A campaign may move opposite to the account it belongs to. Reading
+    'the Ramadan set saw ROAS fall 14%' as a contradiction of an account ROAS
+    that also fell - by a different amount - is being wrong about correct prose."""
+    text = "The Ramadan Prospecting set saw ROAS fall 14% to 5.00 and CPA rise 16% to AED 70."
+    assert find_verb_violations(text, DELTAS) == []
+
+
+def test_a_verb_without_the_account_figure_is_not_judged():
+    """No cited percentage means no basis to judge. Abstaining beats guessing."""
+    assert find_verb_violations("CPA fell to AED 61.51 this week.", DELTAS) == []
+
+
+def test_return_on_ad_spend_is_not_also_read_as_spend():
+    """Longest alias wins, or ROAS's verb binds to spend and invents a fault."""
+    assert find_verb_violations("Return on ad spend fell 8.23% to 5.84.", DELTAS) == []
+
+
+def test_judgement_words_are_not_treated_as_directions():
+    """A falling CPA is an improvement. Mapping 'improved' onto a direction
+    would make the checker repeat the exact conflation it exists to catch."""
+    assert find_verb_violations("CPA improved 9.02% on the back of new creative.", DELTAS) == []
+
+
+def test_zero_movement_is_never_a_verb_violation():
+    assert find_verb_violations("ROAS rose 0.00% on the week.", {"roas_pct": 0.0}) == []
+
+
+def test_combined_check_reports_both_kinds():
+    text = "CPA fell 9.02% while ROAS moved +8.23%."
+    found = find_narrative_violations(text, DELTAS)
+    assert any("describes it as falling" in v for v in found)
+    assert any("prints" in v for v in found)
+
+
+# --------------------------------------------------------------------------
 # The node, in a real graph run
 # --------------------------------------------------------------------------
 CLEAN = "Spend rose +5.99%, ROAS fell -8.23%, CPA rose +9.02%. Steady as she goes."
@@ -146,7 +222,15 @@ def test_incurably_wrong_copy_falls_back_to_deterministic_prose(settings, bundle
     nodes = [n.node for n in s["trace"].steps]
     assert "fallback_narrative" in nodes
     assert s["narrative"] != FLIPPED
-    assert find_sign_violations(s["narrative"], s["deltas"]) == []
+    assert find_narrative_violations(s["narrative"], s["deltas"]) == []
+
+
+def test_the_deterministic_floor_passes_its_own_gate(settings, bundle):
+    """The fallback is only a floor if it cannot itself contradict the maths."""
+    s = run_report("nova-retail", bundle=bundle, engine=_Scripted(FLIPPED), settings=settings)
+    assert find_narrative_violations(s["narrative"], s["deltas"]) == []
+    s2 = run_report("atlas-fitness", bundle=bundle, engine=_Scripted(FLIPPED), settings=settings)
+    assert find_narrative_violations(s2["narrative"], s2["deltas"]) == []
 
 
 def test_the_loop_terminates(settings, bundle):

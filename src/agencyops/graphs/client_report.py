@@ -58,18 +58,12 @@ def _magnitudes(pct: float) -> set[str]:
 
 
 def find_sign_violations(narrative: str, deltas: dict[str, Any]) -> list[str]:
-    """Report every percentage the prose printed with the wrong sign.
+    """Report every percentage the prose printed with the wrong sign character.
 
     Deterministic, text-only, and incapable of repair: it compares what the
     commentary printed against what `compare()` computed, and says so. Keeping
     it unable to rewrite anything is what makes it usable as a gate - a checker
     that also fixes has no independent opinion left to trust.
-
-    Scope is explicit signs only. A wrong *verb* on an unsigned figure ("CPA
-    fell 9.02%") is the same class of error, but detecting it means attributing
-    a verb to a metric across arbitrary sentence structure, and a gate that
-    cries wolf gets switched off. The prompt supplies the verb; this catches
-    the character.
     """
     metrics = {
         key[:-4]: float(value)
@@ -102,6 +96,158 @@ def find_sign_violations(narrative: str, deltas: dict[str, Any]) -> list[str]:
                 )
                 break
     return violations
+
+
+# --------------------------------------------------------------------------
+# Verb checking
+#
+# The sign check above catches a character. This catches the other half of the
+# same error - "CPA fell 9.02%" when it rose - which needs a verb attributed to
+# a metric across arbitrary sentence structure. That attribution is where a
+# checker starts crying wolf, so every rule below is built to abstain rather
+# than guess. An unattributable verb produces no verdict, and no verdict is a
+# pass.
+# --------------------------------------------------------------------------
+
+# Purely directional words only. "improved", "worsened", "better", "stronger"
+# are deliberately absent: a falling CPA is an improvement, so judgement words
+# do not map onto a direction. Conflating the two is the bug this whole gate
+# exists to catch - a checker that repeats the model's mistake is worse than
+# no checker.
+_ROSE = (
+    "rose", "rise", "risen", "rises", "rising", "increased", "increase",
+    "increases", "increasing", "climbed", "climbs", "climbing", "grew",
+    "grown", "growing", "jumped", "jumps", "jumping", "up", "higher",
+)
+_FELL = (
+    "fell", "fall", "fallen", "falls", "falling", "decreased", "decrease",
+    "decreases", "decreasing", "declined", "decline", "declines", "declining",
+    "dropped", "drop", "drops", "dropping", "slipped", "slips", "slipping",
+    "dipped", "dip", "dips", "dipping", "down", "lower",
+)
+
+# Longest alias wins, so "return on ad spend" is one mention of ROAS rather
+# than also a mention of spend - which would bind ROAS's verb to spend and
+# invent a violation out of correct prose.
+_METRIC_ALIASES: dict[str, tuple[str, ...]] = {
+    "roas": ("return on ad spend", "roas"),
+    "cpa": ("cost per acquisition", "cost per conversion", "cost per sale", "cpa"),
+    "ctr": ("click-through rate", "click through rate", "clickthrough rate",
+            "click-through", "ctr"),
+    "conversions": ("conversions", "conversion"),
+    "revenue": ("revenue", "sales"),
+    "spend": ("ad spend", "spending", "spend", "budget"),
+}
+
+# A verb this far past the metric name is answering a different question.
+_WINDOW = 45
+
+# Where one clause stops speaking for the metric and the next starts. Truncating
+# here is what stops "the dip in conversions and the rise in CPA" reading as a
+# claim that conversions rose.
+_CLAUSE_BREAK = re.compile(r"\.|;|\band\b|\bbut\b|\bwhile\b|\bwhilst\b|\bwhereas\b")
+
+_DIRECTION = re.compile(rf"\b({'|'.join(_ROSE + _FELL)})\b")
+
+# "the rise in CPA", "a decline in ROAS" - a verb before the metric only counts
+# when a preposition ties it to this metric. Bare "rose ... CPA" does not bind:
+# in "spend rose 5.99% but revenue fell", the nearest earlier verb belongs to
+# the previous metric.
+_BOUND_BEFORE = re.compile(
+    rf"\b({'|'.join(_ROSE + _FELL)})\b[^.;]{{0,24}}?\b(?:in|for|on)\s*$"
+)
+
+
+def _metric_spans(lowered: str) -> list[tuple[int, int, str]]:
+    """Non-overlapping metric mentions, longest alias winning."""
+    found = [
+        (m.start(), m.end(), metric)
+        for metric, aliases in _METRIC_ALIASES.items()
+        for alias in aliases
+        for m in re.finditer(rf"\b{re.escape(alias)}\b", lowered)
+    ]
+    found.sort(key=lambda s: (s[0] - s[1], s[0]))  # longest match first
+    accepted: list[tuple[int, int, str]] = []
+    for start, end, metric in found:
+        if not any(start < e and s < end for s, e, _ in accepted):
+            accepted.append((start, end, metric))
+    return sorted(accepted)
+
+
+def _claimed_direction(text: str) -> bool | None:
+    match = _DIRECTION.search(_CLAUSE_BREAK.split(text)[0])
+    return match.group(1) in _ROSE if match else None
+
+
+def _cites(region: str, magnitude: str) -> bool:
+    """Does this clause quote the figure as a percentage?
+
+    The lookbehind stops the 0-decimal form of 5.99 ("6") matching the "6%"
+    inside "16%", which would anchor a spend check to a campaign's CPA.
+    """
+    return re.search(rf"(?<![\d.]){re.escape(magnitude)}\s?%", region) is not None
+
+
+def find_verb_violations(narrative: str, deltas: dict[str, Any]) -> list[str]:
+    """Report every metric the prose says moved the wrong way.
+
+    Attribution rules, both deliberately narrow:
+      * a verb after the metric binds, up to the next metric or clause break
+      * a verb before it binds only through a preposition ("the rise in CPA")
+
+    Anything else abstains.
+    """
+    metrics = {
+        key[:-4]: float(value)
+        for key, value in deltas.items()
+        if key.endswith("_pct") and value is not None
+    }
+    lowered = narrative.lower()
+    spans = _metric_spans(lowered)
+
+    violations: list[str] = []
+    reported: set[str] = set()
+    for i, (start, end, metric) in enumerate(spans):
+        pct = metrics.get(metric)
+        if not pct or metric in reported:
+            continue
+
+        # Never read past the next metric mention: that clause is about it.
+        stop = spans[i + 1][0] if i + 1 < len(spans) else len(lowered)
+        previous_end = spans[i - 1][1] if i else 0
+        region = lowered[max(previous_end, start - _WINDOW):min(stop, end + _WINDOW)]
+
+        # The clause must cite this metric's *account-level* movement before we
+        # judge its verb. A good report also discusses individual campaigns -
+        # "the Ramadan set saw ROAS fall 14%" - and a campaign is free to move
+        # opposite to the account it belongs to. Without this anchor the check
+        # reads those sentences as contradictions and is wrong about correct
+        # prose, which is the one failure a gate cannot afford.
+        if not any(_cites(region, mag) for mag in _magnitudes(pct)):
+            continue
+
+        claimed = _claimed_direction(lowered[end:min(stop, end + _WINDOW)])
+        if claimed is None:
+            match = _BOUND_BEFORE.search(lowered[max(previous_end, start - _WINDOW):start])
+            claimed = match.group(1) in _ROSE if match else None
+
+        if claimed is None or claimed == (pct > 0):
+            continue
+
+        violations.append(
+            f"{metric} moved {pct:+.2f}% but the commentary describes it as "
+            f"{'rising' if claimed else 'falling'}"
+        )
+        reported.add(metric)
+    return violations
+
+
+def find_narrative_violations(narrative: str, deltas: dict[str, Any]) -> list[str]:
+    """Every way the prose can contradict the arithmetic: sign, then direction."""
+    return (
+        find_sign_violations(narrative, deltas)
+        + find_verb_violations(narrative, deltas)
+    )
 
 
 def build_report_graph(
@@ -166,11 +312,11 @@ def build_report_graph(
         """Check the prose against the arithmetic. Reports, never repairs."""
         trace = state["trace"]
         with timed(trace, "verify") as t:
-            violations = find_sign_violations(state["narrative"], state["deltas"])
+            violations = find_narrative_violations(state["narrative"], state["deltas"])
             t.summary = (
-                "commentary signs agree with the computed figures"
+                "commentary agrees with the computed figures"
                 if not violations
-                else f"{len(violations)} figure(s) printed with the wrong sign"
+                else f"{len(violations)} statement(s) contradict the computed figures"
             )
             t.detail = {"violations": violations}
         return {"sign_violations": violations}

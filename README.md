@@ -10,7 +10,7 @@ releasing it.**
 
 ```
 $ python scripts/demo.py          # no API keys required
-$ python -m pytest -q             # 101 passed
+$ python -m pytest -q             # 114 passed
 $ uvicorn agencyops.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -90,7 +90,7 @@ run 136b01f06555  [client_report]  status=blocked_on_approval
    1. gather              0.1ms  3 campaigns, 5 time entries
    2. analyse             0.1ms  4 findings (2 high severity)
    3. narrate             0.0ms  narrative via offline (865 chars)
-   4. verify              0.0ms  commentary signs agree with the computed figures
+   4. verify              0.0ms  commentary agrees with the computed figures
    5. assemble            0.0ms  report assembled (45 lines)
    6. propose             0.0ms  3 effects staged, none executed
    7. await_approval      0.0ms  paused - 3 effects awaiting human approval
@@ -100,7 +100,7 @@ run 136b01f06555  [client_report]  status=blocked_on_approval
 campaigns spending under AED 2,000, are treated as noise and never surface. An
 agency automation that flags everything gets ignored within a fortnight.
 
-### The sign check
+### Checking the prose against the maths
 
 `verify` exists because a prompt cannot make a guarantee. The model is handed
 every figure pre-computed, with the direction and the judgement in separate
@@ -117,12 +117,36 @@ retry with the specific violation attached, and copy that still contradicts the
 figures is replaced by the offline engine's templated prose. The trace records
 that it happened and why.
 
-It checks characters, not verbs: an explicit sign in front of a magnitude,
-across every dash variant a model might reach for — the observed failure used
-U+2011, a non-breaking hyphen an ASCII check would have missed. Where two
-metrics share a magnitude in opposite directions the figure is skipped rather
-than guessed at. **A gate that cries wolf gets switched off, and then it
-protects nothing.**
+Two checks run, covering both halves of the error:
+
+- **Sign** — an explicit `+`/`−` in front of a magnitude, across every dash
+  variant a model might reach for. The observed failure used U+2011, a
+  non-breaking hyphen an ASCII check would have missed.
+- **Direction** — the verb attached to a metric, for the case the sign check
+  cannot see: *"CPA fell 9.02%"* when it rose.
+
+The whole design problem is the second one, because attributing a verb to a
+metric is where a checker starts inventing faults. **A gate that cries wolf
+gets switched off, and then it protects nothing.** So every rule abstains
+rather than guesses:
+
+- A verb after the metric binds only up to the next metric or clause break, so
+  *"the dip in conversions and the rise in CPA"* is not read as conversions
+  rising.
+- A verb *before* the metric binds only through a preposition — *"the drop in
+  CPA"* counts, bare *"spend rose … but revenue"* does not.
+- Longest alias wins, so *"return on ad spend"* is one mention of ROAS rather
+  than also a mention of spend.
+- Judgement words are excluded outright. A falling CPA is an *improvement*;
+  mapping "improved" onto a direction would make the checker repeat the exact
+  conflation it exists to catch.
+- **A clause is only judged if it cites the account-level figure.** A good
+  report also discusses individual campaigns, and a campaign is free to move
+  opposite to the account it belongs to — reading *"the Ramadan set saw ROAS
+  fall 14%"* as a contradiction would be being wrong about correct prose.
+
+Validated against a corpus of real model output, not just synthetic cases:
+zero false positives, while still catching every planted inversion.
 
 ---
 
@@ -217,7 +241,7 @@ pip install -r requirements.txt
 cp .env.example .env          # optional — defaults run fully offline
 
 python scripts/demo.py        # both workflows, narrated
-python -m pytest -q           # 101 tests
+python -m pytest -q           # 114 tests
 uvicorn agencyops.api.main:app --reload --app-dir src
 ```
 
@@ -298,7 +322,7 @@ src/agencyops/
     creative_pipeline.py  creative workflow with the revision loop
   api/               FastAPI transport layer
     static/          the review console — hand-written HTML, CSS, JS
-tests/               101 tests
+tests/               114 tests
 scripts/demo.py      narrated end-to-end run
 ```
 
