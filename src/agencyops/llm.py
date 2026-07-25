@@ -43,7 +43,14 @@ SYSTEM_PROMPTS: dict[str, str] = {
         "commercially literate client who is not a media buyer. Lead with what "
         "changed and why it matters commercially. Be specific with numbers. "
         "Never invent a figure that is not in the supplied data. If performance "
-        "declined, say so plainly and state the corrective action. "
+        "declined, say so plainly and state the corrective action.\n\n"
+        "Every figure and every direction of travel is supplied to you already "
+        "computed. Reproduce them exactly. Never flip a sign, never turn a rise "
+        "into a fall, and never put a minus in front of a number to convey that "
+        "the news is bad: a cost that went up went UP, and you say so in words. "
+        "Good and bad are carried by your sentences, never by the arithmetic. "
+        "The same figure appears in a table beside your commentary, and a reader "
+        "who spots the two disagreeing stops trusting both.\n\n"
         "Three short paragraphs, no headings, no bullet points."
     ),
     "ad_copy": (

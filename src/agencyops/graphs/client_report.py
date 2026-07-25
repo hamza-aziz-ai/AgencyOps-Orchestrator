@@ -198,6 +198,47 @@ def build_report_graph(
 # --------------------------------------------------------------------------
 # Rendering helpers
 # --------------------------------------------------------------------------
+# Which way is "good" for each metric. Spend is deliberately unjudged - more
+# spend is neither win nor loss on its own, it is the input.
+#
+# This table exists because of an observed failure: handed a bare `cpa=16.09`,
+# the model wrote "CPA up to AED 70 (-16%)". It had correctly worked out that a
+# rising CPA is bad news and reached for a minus sign to say so, inverting a
+# figure the report table states correctly two lines above. The fix is to stop
+# making it infer: give it the sign, the verb and the judgement separately, so
+# "is this bad?" and "which way did it move?" are never the same question.
+_METRIC_SENSE: dict[str, str | None] = {
+    "spend": None,
+    "revenue": "higher_is_better",
+    "conversions": "higher_is_better",
+    "roas": "higher_is_better",
+    "cpa": "lower_is_better",
+    "ctr": "higher_is_better",
+}
+
+
+def _movement_table(deltas: dict[str, Any]) -> str:
+    """Render week-on-week movement with the sign, verb and judgement spelled out."""
+    rows = []
+    for metric, sense in _METRIC_SENSE.items():
+        pct = float(deltas.get(f"{metric}_pct", 0.0) or 0.0)
+        if pct > 0:
+            verb = "rose"
+        elif pct < 0:
+            verb = "fell"
+        else:
+            verb = "held flat"
+
+        if sense is None or pct == 0:
+            note = ""
+        elif (pct > 0) == (sense == "higher_is_better"):
+            note = "  better than last week"
+        else:
+            note = "  worse than last week"
+        rows.append(f"  {metric:<12}{pct:+.2f}%  {verb}{note}")
+    return "\n".join(rows)
+
+
 def _narrative_prompt(ctx: dict[str, Any]) -> str:
     findings = "\n".join(
         f"- [{f['severity']}] {f['headline']} | action: {f['recommendation']}"
@@ -211,9 +252,12 @@ THIS WEEK
 spend={t['spend']:,.0f} revenue={t['revenue']:,.0f} conversions={t['conversions']} \
 roas={t['roas']:.2f} cpa={t['cpa']:,.2f} ctr={t['ctr']:.2f}%
 
-WEEK-ON-WEEK CHANGE (%)
-spend={d['spend_pct']} revenue={d['revenue_pct']} conversions={d['conversions_pct']} \
-roas={d['roas_pct']} cpa={d['cpa_pct']}
+WEEK-ON-WEEK CHANGE
+Each row below is computed, not estimated. Copy the sign and the verb exactly.
+A metric marked "rose" is described as rising and keeps its + sign, even when
+rising is the bad outcome. Never attach a minus sign to a number to signal that
+it is bad news - say the number rose, and say plainly that this is worse.
+{_movement_table(d)}
 
 MATERIAL FINDINGS
 {findings}
