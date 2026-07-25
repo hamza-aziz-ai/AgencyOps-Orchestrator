@@ -128,6 +128,12 @@ const WORKFLOW_LABEL = {
   creative_pipeline: 'Creative production',
 };
 
+const ENGINE_LABEL = {
+  ollama: ['Ollama', 'ok'],
+  gemini: ['Gemini', 'ok'],
+  offline: ['Offline engine', 'info'],
+};
+
 function badge(map, key) {
   const [label, tone] = map[key] || [String(key), 'neutral'];
   return `<span class="badge badge--${tone}">${esc(label)}</span>`;
@@ -378,10 +384,10 @@ function renderDashboard() {
             </tr>
             <tr>
               <th scope="row">LLM engine</th>
-              <td>${badge({ gemini: ['Gemini', 'ok'], offline: ['Offline engine', 'info'] }, h.llm_engine)}</td>
+              <td>${badge(ENGINE_LABEL, h.llm_engine)}</td>
               <td class="muted">${h.llm_engine === 'offline'
                 ? 'Deterministic, data-grounded generation. No API key needed.'
-                : 'Live generation. Figures are still computed in Python, never by the model.'}</td>
+                : `Live generation via ${esc(h.llm_model || h.llm_engine)}. Figures are still computed in Python, never by the model. A provider outage degrades to the offline engine rather than failing the run.`}</td>
             </tr>
             <tr>
               <th scope="row">Approval gate</th>
@@ -1155,7 +1161,7 @@ async function refreshRuns() {
 function paintEnvStrip() {
   const h = state.health || {};
   $('#env-connectors').textContent = h.connector_mode === 'live' ? 'Live accounts' : 'Mock fixtures';
-  $('#env-engine').textContent = h.llm_engine === 'gemini' ? 'Gemini' : 'Offline engine';
+  $('#env-engine').textContent = h.llm_model || (ENGINE_LABEL[h.llm_engine] || ['Unknown'])[0];
   $('#env-gate').textContent = h.human_approval_required ? 'Enabled' : 'Disabled';
 }
 

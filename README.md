@@ -1,7 +1,7 @@
 # AgencyOps Orchestrator
 
 Agentic workflow automation for an eCommerce marketing agency — built on
-LangGraph, FastAPI and Google Gemini.
+LangGraph, FastAPI and Ollama (gpt-oss).
 
 It automates two recurring agency processes end to end (weekly client
 reporting and creative production), and it does so with a property most
@@ -10,7 +10,7 @@ releasing it.**
 
 ```
 $ python scripts/demo.py          # no API keys required
-$ python -m pytest -q             # 52 passed
+$ python -m pytest -q             # 65 passed
 $ uvicorn agencyops.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -189,7 +189,7 @@ pip install -r requirements.txt
 cp .env.example .env          # optional — defaults run fully offline
 
 python scripts/demo.py        # both workflows, narrated
-python -m pytest -q           # 52 tests
+python -m pytest -q           # 65 tests
 uvicorn agencyops.api.main:app --reload --app-dir src
 ```
 
@@ -198,16 +198,41 @@ http://localhost:8000/docs for the API.
 
 ### Three run modes, one build
 
-| Mode | `CONNECTOR_MODE` | `GEMINI_API_KEY` | Use |
+| Mode | `CONNECTOR_MODE` | `LLM_PROVIDER` | Use |
 |---|---|---|---|
-| Offline demo | `mock` | unset | Demos, CI, this repo's default |
-| Staging | `mock` | set | Tune prompts against real generation, zero client risk |
-| Production | `live` | set | Real Meta / Harvest / Slack / Trello |
+| Offline demo | `mock` | `auto` (no key) | Demos, CI, this repo's default |
+| Staging | `mock` | `ollama` | Tune prompts against real generation, zero client risk |
+| Production | `live` | `ollama` | Real Meta / Harvest / Slack / Trello |
+
+### Choosing a model
+
+Generation runs through Ollama by default, on `gpt-oss:120b-cloud`:
+
+```bash
+ollama signin                        # cloud models only
+ollama pull gpt-oss:120b-cloud
+echo "LLM_PROVIDER=ollama" >> .env
+```
+
+Swap `OLLAMA_MODEL` for a tag you have pulled locally (`gpt-oss:20b`) to run
+with no external service at all, or set `LLM_PROVIDER=gemini` with a
+`GEMINI_API_KEY` — both satisfy the same `LLMEngine` protocol and no graph code
+changes.
+
+`auto` deliberately never resolves to Ollama. A daemon happening to run on the
+box is not consent to send client data through it, so pointing the project at a
+provider is always an explicit line in `.env`. The test suite pins itself to
+`offline` at conftest import, so a configured checkout still has a
+deterministic, network-free suite.
 
 The offline LLM engine is not a stub returning filler. It produces genuine,
 data-grounded output for every task the graphs need — which is why the demo
-runs anywhere, the test suite is deterministic, and an LLM outage degrades
-reporting to templated prose instead of taking it down.
+runs anywhere, the test suite is deterministic, and a provider outage degrades
+reporting to templated prose instead of taking it down. That last part is
+enforced rather than asserted: every remote engine catches its own failures per
+call and falls through to the offline engine, and the trace records which
+engine actually produced the text, so a week of templated commentary is
+diagnosable rather than mysterious.
 
 ---
 
@@ -231,7 +256,7 @@ reporting to templated prose instead of taking it down.
 ```
 src/agencyops/
   config.py          environment-driven settings
-  llm.py             Gemini engine + deterministic offline engine
+  llm.py             Ollama + Gemini engines, deterministic offline fallback
   analysis.py        deterministic metrics, deltas, signal detection
   observability.py   run tracing, persisted as plain JSON
   runstore.py        paused-run registry and approval dispatcher
@@ -245,7 +270,7 @@ src/agencyops/
     creative_pipeline.py  creative workflow with the revision loop
   api/               FastAPI transport layer
     static/          the review console — hand-written HTML, CSS, JS
-tests/               52 tests
+tests/               65 tests
 scripts/demo.py      narrated end-to-end run
 ```
 

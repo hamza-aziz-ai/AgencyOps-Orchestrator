@@ -47,6 +47,7 @@ def health() -> dict[str, Any]:
         "status": "ok",
         "connector_mode": s.connector_mode,
         "llm_engine": build_engine(s).name,
+        "llm_model": s.llm_model,
         "human_approval_required": s.require_human_approval,
     }
 

@@ -3,7 +3,7 @@
 **Agentic automation for an eCommerce marketing agency**
 
 Hamza Aziz · AI Product Engineer
-LangGraph · FastAPI · Google Gemini · Python
+LangGraph · FastAPI · Ollama (gpt-oss) · Python
 
 > **Provenance, stated plainly:** this is a self-directed build responding to a
 > real published job specification, not a delivered client engagement. The
@@ -158,9 +158,9 @@ garbage.
 ## Engineering decisions worth defending
 
 **Deterministic offline LLM engine.**
-Behind the same interface as Gemini sits an engine that produces genuine,
+Behind the same interface as the model providers sits an engine that produces genuine,
 data-grounded output with no API key. This is not a test mock. It makes the
-demo runnable anywhere, the 52-test suite deterministic and free, and — the
+demo runnable anywhere, the 65-test suite deterministic and free, and — the
 actual production argument — it means an LLM outage degrades reporting to
 templated prose instead of taking client reporting offline entirely.
 
@@ -188,7 +188,7 @@ the answer is on disk and readable without a subscription.
 | | |
 |---|---|
 | Workflows | 2 end-to-end (reporting, creative production) |
-| Test suite | 52 tests, all passing |
+| Test suite | 65 tests, all passing |
 | External writes made without approval | 0 — asserted by test |
 | Runs with no credentials | Full demo + entire suite |
 | Connectors | 4 (Meta Ads, Harvest, Slack, Trello) — mock + live |

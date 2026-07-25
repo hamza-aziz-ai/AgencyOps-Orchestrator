@@ -48,6 +48,38 @@ most heavily unit-tested — twelve tests covering thresholds, zero-division,
 severity ranking and delta computation. Keeping it out of the graph means those
 tests run without constructing any graph state.
 
+## Engine selection and degradation
+
+```
+graphs ──▶ LLMEngine (Protocol) ──▶ OllamaEngine | GeminiEngine | OfflineEngine
+                                          └── failure ──▶ OfflineEngine
+```
+
+Same shape as the connector boundary, for the same reason: graph code never
+branches on which engine is active, so swapping gpt-oss for Gemini is a line in
+`.env`.
+
+Two decisions worth defending.
+
+**Degradation is per call, not per process.** `RemoteEngine.complete()` catches,
+logs, and falls through to the offline engine; subclasses implement `_generate`
+and nothing else. Handling this only at construction time — the obvious
+placement — would mean a provider that is reachable at startup and dies at
+09:03 on Monday takes weekly reporting down with it. A node raising on an
+expected failure would also strand the run with no report and no trace of why,
+which is the outcome the whole design exists to prevent.
+
+The `LLMResponse` reports the engine that *produced* the text, not the one that
+was configured, and `narrate` records it in the trace. "Why does this week's
+commentary read like a template" is then a question the run answers itself.
+
+**`auto` never resolves to a provider the user did not name.** An Ollama daemon
+listening on localhost is not consent to send client performance data through
+it, and inferring otherwise would make the safe path the one you have to know
+to ask for. Tests go further and pin `LLM_PROVIDER=offline` in the environment
+at conftest import, so a checkout configured for Ollama still runs a
+deterministic, network-free suite.
+
 ## Connector protocol boundary
 
 ```

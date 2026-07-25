@@ -1,7 +1,8 @@
 """LLM access layer.
 
-Two engines behind one interface:
+Three engines behind one interface:
 
+  OllamaEngine   - real generation via Ollama (gpt-oss by default)
   GeminiEngine   - real generation via google-genai
   OfflineEngine  - deterministic, template-driven, zero-dependency
 
@@ -11,12 +12,19 @@ things: the demo runs on any machine with no API key, the test suite is
 deterministic, and an LLM outage degrades the system to templated output
 rather than taking reporting down entirely.
 
+That third property is enforced here rather than hoped for: both remote
+engines degrade to the offline engine on any failure, per call. A model
+provider going down must not take weekly client reporting with it, and a node
+that raises on an expected failure would strand a run with no report and no
+trace of why.
+
 Every call is tagged with a `task` label. The offline engine routes on it;
-the Gemini engine uses it to select the system prompt. Same contract either
+the remote engines use it to select the system prompt. Same contract either
 way, so graph code never branches on which engine is active.
 """
 from __future__ import annotations
 
+import abc
 import json
 import logging
 import re
@@ -69,10 +77,75 @@ class LLMEngine(Protocol):
     def complete(self, task: str, prompt: str, context: dict[str, Any]) -> LLMResponse: ...
 
 
+def system_prompt(task: str) -> str:
+    return SYSTEM_PROMPTS.get(task, "You are a precise, concise assistant.")
+
+
 # --------------------------------------------------------------------------
-# Real engine
+# Remote engines
 # --------------------------------------------------------------------------
-class GeminiEngine:
+class RemoteEngine(abc.ABC):
+    """Base for engines that depend on a service outside this process.
+
+    Subclasses implement `_generate`. Everything else here is the degradation
+    policy, kept in one place so a new provider cannot accidentally ship
+    without it.
+
+    The returned `LLMResponse` carries the engine that actually produced the
+    text, not the one that was configured. The trace records that field, so
+    "why does this week's commentary read like a template" is answerable
+    after the fact instead of being a mystery.
+    """
+
+    name = "remote"
+
+    @abc.abstractmethod
+    def _generate(self, task: str, prompt: str, context: dict[str, Any]) -> str:
+        """Return raw model text, or raise."""
+
+    def complete(self, task: str, prompt: str, context: dict[str, Any]) -> LLMResponse:
+        try:
+            text = self._generate(task, prompt, context).strip()
+            if not text:
+                raise ValueError("model returned empty output")
+        except Exception as exc:  # noqa: BLE001 - degradation is the point
+            log.warning(
+                "%s failed on task %r (%s); degrading to the offline engine",
+                self.name,
+                task,
+                exc,
+            )
+            return _OFFLINE.complete(task, prompt, context)
+        return LLMResponse(text=text, engine=self.name, task=task)
+
+
+class OllamaEngine(RemoteEngine):
+    """Generation via Ollama - local daemon or its hosted `-cloud` models."""
+
+    name = "ollama"
+
+    def __init__(self, settings: Settings) -> None:
+        from ollama import Client  # imported lazily - optional dependency
+
+        kwargs: dict[str, Any] = {"timeout": settings.ollama_timeout_s}
+        if settings.ollama_host:
+            kwargs["host"] = settings.ollama_host
+        self._client = Client(**kwargs)
+        self._model = settings.ollama_model
+
+    def _generate(self, task: str, prompt: str, context: dict[str, Any]) -> str:
+        resp = self._client.chat(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": system_prompt(task)},
+                {"role": "user", "content": prompt},
+            ],
+            options={"temperature": 0.4},
+        )
+        return _strip_reasoning(resp.message.content or "")
+
+
+class GeminiEngine(RemoteEngine):
     name = "gemini"
 
     def __init__(self, settings: Settings) -> None:
@@ -81,14 +154,28 @@ class GeminiEngine:
         self._client = genai.Client(api_key=settings.gemini_api_key)
         self._model = settings.gemini_model
 
-    def complete(self, task: str, prompt: str, context: dict[str, Any]) -> LLMResponse:
-        system = SYSTEM_PROMPTS.get(task, "You are a precise, concise assistant.")
+    def _generate(self, task: str, prompt: str, context: dict[str, Any]) -> str:
         resp = self._client.models.generate_content(
             model=self._model,
             contents=prompt,
-            config={"system_instruction": system, "temperature": 0.4},
+            config={"system_instruction": system_prompt(task), "temperature": 0.4},
         )
-        return LLMResponse(text=(resp.text or "").strip(), engine=self.name, task=task)
+        return resp.text or ""
+
+
+_THINK_BLOCK = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_reasoning(text: str) -> str:
+    """Drop inline chain-of-thought from a reasoning model's output.
+
+    gpt-oss returns its reasoning in a separate `thinking` field, so this is
+    normally a no-op. It is here because the failure it prevents is silent and
+    expensive: one model or client version that inlines <think> blocks instead
+    turns `ad_copy` into unparseable JSON, and the creative pipeline reports a
+    generation failure rather than a formatting one.
+    """
+    return _THINK_BLOCK.sub("", text).strip()
 
 
 # --------------------------------------------------------------------------
@@ -222,6 +309,10 @@ class OfflineEngine:
         )
 
 
+# The instance remote engines degrade to. Stateless, so one is enough.
+_OFFLINE = OfflineEngine()
+
+
 def _truncate(text: str, limit: int) -> str:
     """Cut to a length limit on a word boundary.
 
@@ -241,11 +332,26 @@ def _truncate(text: str, limit: int) -> str:
 # --------------------------------------------------------------------------
 # Resolution
 # --------------------------------------------------------------------------
+ENGINES: dict[str, type[RemoteEngine]] = {
+    "ollama": OllamaEngine,
+    "gemini": GeminiEngine,
+}
+
+
 def build_engine(settings: Settings | None = None) -> LLMEngine:
+    """Resolve the configured engine, or the offline one if it cannot be built.
+
+    Construction failing here means a missing dependency or bad config, which
+    is worth a warning at startup. A *call* failing later is handled inside
+    RemoteEngine, because by then a run is already in flight.
+    """
     settings = settings or get_settings()
-    if settings.llm_available:
-        try:
-            return GeminiEngine(settings)
-        except Exception as exc:  # pragma: no cover - depends on optional dep
-            log.warning("Gemini unavailable (%s); falling back to offline engine", exc)
-    return OfflineEngine()
+    provider = settings.resolved_llm_provider
+    engine_cls = ENGINES.get(provider)
+    if engine_cls is None:
+        return _OFFLINE
+    try:
+        return engine_cls(settings)
+    except Exception as exc:  # pragma: no cover - depends on optional deps
+        log.warning("%s unavailable (%s); falling back to offline engine", provider, exc)
+    return _OFFLINE
