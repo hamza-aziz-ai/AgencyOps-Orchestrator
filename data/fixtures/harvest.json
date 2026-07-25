@@ -1,0 +1,21 @@
+{
+  "nova-retail": {
+    "retainer": {"contracted_hours": 80.0, "used_hours": 93.5},
+    "entries": [
+      {"task": "Media buying", "hours": 31.0, "person": "Layla"},
+      {"task": "Creative production", "hours": 28.5, "person": "Omar"},
+      {"task": "Reporting", "hours": 14.0, "person": "Layla"},
+      {"task": "Account management", "hours": 12.0, "person": "Sara"},
+      {"task": "Ad-hoc client requests", "hours": 8.0, "person": "Sara"}
+    ]
+  },
+  "atlas-fitness": {
+    "retainer": {"contracted_hours": 60.0, "used_hours": 47.0},
+    "entries": [
+      {"task": "Media buying", "hours": 19.0, "person": "Omar"},
+      {"task": "Creative production", "hours": 14.5, "person": "Yusuf"},
+      {"task": "Reporting", "hours": 8.5, "person": "Omar"},
+      {"task": "Account management", "hours": 5.0, "person": "Sara"}
+    ]
+  }
+}

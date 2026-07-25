@@ -1,0 +1,18 @@
+{
+  "nova-retail": {
+    "tone": "confident, warm, never pushy",
+    "banned_phrases": ["cheap", "guaranteed", "limited time only", "act now", "best price ever"],
+    "required_elements": ["value proposition", "call to action"],
+    "max_headline_chars": 40,
+    "max_body_chars": 125,
+    "compliance_notes": "No absolute health, income or outcome claims. No superlatives that cannot be substantiated."
+  },
+  "atlas-fitness": {
+    "tone": "energetic, encouraging, inclusive",
+    "banned_phrases": ["shred", "guaranteed results", "bikini body", "transform overnight", "burn fat fast"],
+    "required_elements": ["call to action"],
+    "max_headline_chars": 40,
+    "max_body_chars": 125,
+    "compliance_notes": "No body-shaming language. No guaranteed physical outcomes."
+  }
+}

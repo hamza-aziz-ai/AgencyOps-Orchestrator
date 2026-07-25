@@ -1,0 +1,24 @@
+{
+  "nova-retail": {
+    "current": [
+      {"campaign_id": "23851", "campaign_name": "Nova | Ramadan Prospecting", "spend": 42800.0, "impressions": 1840000, "clicks": 27600, "conversions": 612, "revenue": 214000.0},
+      {"campaign_id": "23852", "campaign_name": "Nova | Retargeting DPA", "spend": 18400.0, "impressions": 410000, "clicks": 14350, "conversions": 498, "revenue": 187000.0},
+      {"campaign_id": "23853", "campaign_name": "Nova | Brand Awareness", "spend": 9600.0, "impressions": 2100000, "clicks": 8400, "conversions": 41, "revenue": 12300.0}
+    ],
+    "previous": [
+      {"campaign_id": "23851", "campaign_name": "Nova | Ramadan Prospecting", "spend": 39500.0, "impressions": 1710000, "clicks": 26800, "conversions": 655, "revenue": 231000.0},
+      {"campaign_id": "23852", "campaign_name": "Nova | Retargeting DPA", "spend": 17900.0, "impressions": 398000, "clicks": 13900, "conversions": 471, "revenue": 176000.0},
+      {"campaign_id": "23853", "campaign_name": "Nova | Brand Awareness", "spend": 9400.0, "impressions": 1980000, "clicks": 9100, "conversions": 58, "revenue": 17900.0}
+    ]
+  },
+  "atlas-fitness": {
+    "current": [
+      {"campaign_id": "31007", "campaign_name": "Atlas | Membership Q3", "spend": 26300.0, "impressions": 890000, "clicks": 19800, "conversions": 384, "revenue": 153600.0},
+      {"campaign_id": "31008", "campaign_name": "Atlas | PT Upsell", "spend": 8100.0, "impressions": 220000, "clicks": 6600, "conversions": 132, "revenue": 79200.0}
+    ],
+    "previous": [
+      {"campaign_id": "31007", "campaign_name": "Atlas | Membership Q3", "spend": 25100.0, "impressions": 861000, "clicks": 18200, "conversions": 297, "revenue": 118800.0},
+      {"campaign_id": "31008", "campaign_name": "Atlas | PT Upsell", "spend": 7900.0, "impressions": 214000, "clicks": 6100, "conversions": 118, "revenue": 70800.0}
+    ]
+  }
+}
