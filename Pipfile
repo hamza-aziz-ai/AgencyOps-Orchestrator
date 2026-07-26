@@ -13,6 +13,7 @@ pydantic-settings = "*"
 httpx = "*"
 ollama = "*"
 python-dotenv = "*"
+httpx2 = "*"
 
 [dev-packages]
 pytest = "*"
