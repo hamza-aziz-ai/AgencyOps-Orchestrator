@@ -18,4 +18,4 @@ pytest>=9.1,<10
 # Starlette's TestClient wants httpx2; without it the suite still passes but
 # emits a deprecation warning on every run. Test-only — the live connectors in
 # connectors/live.py use httpx above.
-httpx2>=2.9,<3
+httpx2>=2.12.0,<3
