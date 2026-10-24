@@ -23,7 +23,7 @@ from typing import Any, Literal
 from langgraph.graph import END, StateGraph
 
 from ..config import Settings, get_settings
-from ..connectors import ConnectorBundle, build_bundle
+from ..connectors import ConnectorBundle, build_bundle, run_status
 from ..connectors.base import Effect
 from ..llm import LLMEngine, build_engine
 from ..observability import RunTrace, timed
@@ -100,6 +100,11 @@ def score_variant(variant: dict[str, Any], guidelines: dict[str, Any]) -> dict[s
     }
 
 
+def _valid_variant(v: Any) -> bool:
+    """The shape every variant must have before it can be scored."""
+    return isinstance(v, dict) and isinstance(v.get("headline"), str) and isinstance(v.get("body"), str)
+
+
 _CTA_MARKERS = (
     "shop", "buy", "get", "start", "join", "book", "try",
     "discover", "claim", "explore", "see ", "learn",
@@ -172,8 +177,10 @@ def build_creative_graph(
             resp = engine.complete("ad_copy", _generation_prompt(state), ctx)
             try:
                 variants = resp.as_json()
-                if not isinstance(variants, list):
-                    raise ValueError("expected a JSON list of variants")
+                if not isinstance(variants, list) or not variants:
+                    raise ValueError("expected a non-empty JSON list of variants")
+                if not all(_valid_variant(v) for v in variants):
+                    raise ValueError("every variant needs a string 'headline' and 'body'")
             except Exception as exc:  # noqa: BLE001
                 t.summary = f"failed to parse model output: {exc}"
                 return {"errors": [f"Copy generation returned unparseable output: {exc}"]}
@@ -215,9 +222,13 @@ def build_creative_graph(
                 }
                 resp = engine.complete("copy_revision", _revision_prompt(v, g), ctx)
                 try:
-                    repaired.append(resp.as_json())
+                    revised = resp.as_json()
                 except Exception:  # noqa: BLE001 - keep the original, it will fail scoring again
-                    repaired.append({"headline": v["headline"], "body": v["body"]})
+                    revised = None
+                repaired.append(
+                    revised if _valid_variant(revised)
+                    else {"headline": v["headline"], "body": v["body"]}
+                )
             failing = sum(1 for v in state["scored"] if not v["passed"])
             t.summary = f"revised {failing} failing variants"
         return {"variants": repaired, "revision_round": rnd}
@@ -277,18 +288,9 @@ def build_creative_graph(
     def dispatch(state: CreativeState) -> dict[str, Any]:
         trace = state["trace"]
         with timed(trace, "dispatch") as t:
-            executed = 0
-            for effect in state.get("effects", []):
-                if effect.status not in ("proposed", "approved"):
-                    continue
-                try:
-                    effect.result = bundle.writer(effect.connector).execute(effect)
-                    effect.status = "executed"
-                    executed += 1
-                except Exception as exc:  # noqa: BLE001
-                    effect.status = "failed"
-                    effect.result = {"error": str(exc)}
-            t.summary = f"{executed}/{len(state.get('effects', []))} effects executed"
+            effects = state.get("effects", [])
+            executed, failed = bundle.dispatch(effects)
+            t.summary = f"{executed}/{len(effects)} effects executed, {failed} failed"
         return {}
 
     def halt_for_approval(state: CreativeState) -> dict[str, Any]:
@@ -419,9 +421,5 @@ def run_creative(
         "errors": [],
     }
     result = graph.invoke(initial)
-    trace.finish(
-        "blocked_on_approval"
-        if result.get("approval_required") and not result.get("approved")
-        else "completed"
-    )
+    trace.finish("failed" if result.get("errors") else run_status(result.get("effects", [])))
     return result

@@ -6,6 +6,7 @@ this layer is transport.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,7 @@ from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..config import get_settings
-from ..connectors import build_bundle
+from ..connectors import build_bundle, run_status
 from ..graphs.client_report import CLIENT_LABELS, build_report_graph
 from ..graphs.creative_pipeline import build_creative_graph, clients_with_guidelines
 from ..llm import build_engine
@@ -23,6 +24,8 @@ from ..runstore import STORE, StoredRun
 from .schemas import CreativeRequest, DecisionRequest, ReportRequest
 
 CONSOLE_DIR = Path(__file__).resolve().parent / "static"
+
+log = logging.getLogger(__name__)
 
 app = FastAPI(
     title="AgencyOps Orchestrator",
@@ -33,6 +36,27 @@ app = FastAPI(
         "before anything reaches a client."
     ),
 )
+
+
+def _fail(trace: RunTrace) -> None:
+    """Mark a run failed and keep its trace, without masking the failure.
+
+    Called while a workflow error is already on its way out, so a trace that
+    cannot be written is logged rather than raised over the real problem.
+    """
+    trace.finish("failed")
+    try:
+        trace.persist()
+    except Exception:  # noqa: BLE001 - never mask the workflow's own failure
+        log.exception("could not persist trace for failed run %s", trace.run_id)
+
+
+def _invoke(graph: Any, initial: dict[str, Any], trace: RunTrace) -> dict[str, Any]:
+    try:
+        return graph.invoke(initial)
+    except Exception:
+        _fail(trace)
+        raise
 
 
 @app.get("/", include_in_schema=False)
@@ -69,7 +93,8 @@ def client_report(req: ReportRequest) -> dict[str, Any]:
     graph = build_report_graph(bundle=bundle, engine=build_engine(settings), settings=settings)
     trace = RunTrace(workflow="client_report")
 
-    state = graph.invoke(
+    state = _invoke(
+        graph,
         {
             "client": req.client,
             "window_days": req.window_days,
@@ -78,18 +103,15 @@ def client_report(req: ReportRequest) -> dict[str, Any]:
             "findings": [],
             "effects": [],
             "errors": [],
-        }
+        },
+        trace,
     )
 
     if state.get("errors"):
-        trace.finish("failed")
+        _fail(trace)
         raise HTTPException(status_code=404, detail=state["errors"][0])
 
-    trace.finish(
-        "blocked_on_approval"
-        if state.get("approval_required") and not state.get("approved")
-        else "completed"
-    )
+    trace.finish(run_status(state.get("effects", [])))
     run = STORE.add(
         StoredRun(
             run_id=trace.run_id,
@@ -124,24 +146,22 @@ def creative(req: CreativeRequest) -> dict[str, Any]:
     graph = build_creative_graph(bundle=bundle, engine=build_engine(settings), settings=settings)
     trace = RunTrace(workflow="creative_pipeline")
 
-    state = graph.invoke(
+    state = _invoke(
+        graph,
         {
             **req.model_dump(),
             "trace": trace,
             "effects": [],
             "errors": [],
-        }
+        },
+        trace,
     )
 
     if state.get("errors"):
-        trace.finish("failed")
+        _fail(trace)
         raise HTTPException(status_code=400, detail=state["errors"][0])
 
-    trace.finish(
-        "blocked_on_approval"
-        if state.get("approval_required") and not state.get("approved")
-        else "completed"
-    )
+    trace.finish(run_status(state.get("effects", [])))
     run = STORE.add(
         StoredRun(
             run_id=trace.run_id,
@@ -199,6 +219,9 @@ def decide(run_id: str, req: DecisionRequest) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"No run {run_id!r}") from None
     except IndexError:
         raise HTTPException(status_code=400, detail="effect_indexes out of range") from None
+    except ValueError as exc:
+        # The request is well-formed but conflicts with where the run stands.
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     return {**result, **STORE.get(run_id).summary()}
 
 

@@ -11,6 +11,7 @@ from .base import (
     TimeEntry,
     TimeTrackingConnector,
     WriteConnector,
+    run_status,
 )
 from .mock import MockEmail, MockHarvest, MockMetaAds, MockSlack, MockTrello
 
@@ -24,6 +25,7 @@ __all__ = [
     "TimeTrackingConnector",
     "WriteConnector",
     "build_bundle",
+    "run_status",
 ]
 
 

@@ -89,12 +89,25 @@ class Effect:
     payload: dict[str, Any]
     summary: str
     reversible: bool = True
-    status: Literal["proposed", "approved", "rejected", "executed", "failed"] = "proposed"
+    status: Literal["proposed", "rejected", "executed", "failed"] = "proposed"
     result: dict[str, Any] | None = None
 
     def render(self) -> str:
         flag = "" if self.reversible else "  [IRREVERSIBLE]"
         return f"[{self.connector}.{self.action}] {self.summary}{flag}"
+
+
+def run_status(effects: list[Effect]) -> str:
+    """A run's status, derived from where its effects stand rather than from
+    the last action taken - so a partial decision never reads as finished."""
+    statuses = {e.status for e in effects}
+    if "proposed" in statuses:
+        return "blocked_on_approval"
+    if "failed" in statuses:
+        return "completed_with_errors"
+    if statuses == {"rejected"}:
+        return "rejected"
+    return "completed"
 
 
 # --------------------------------------------------------------------------
@@ -139,3 +152,25 @@ class ConnectorBundle:
                 f"Available: {sorted(self.writers)}"
             )
         return self.writers[name]
+
+    def dispatch(self, effects: list[Effect]) -> tuple[int, int]:
+        """Execute the proposed effects; the one path to an external write.
+
+        Approval is the caller's job - this only executes. A failing write is
+        recorded on its effect and the rest still run. Settled effects
+        (executed, failed, rejected) are skipped, so nothing is retried.
+        Returns (executed, failed).
+        """
+        executed = failed = 0
+        for effect in effects:
+            if effect.status != "proposed":
+                continue
+            try:
+                effect.result = self.writer(effect.connector).execute(effect)
+                effect.status = "executed"
+                executed += 1
+            except Exception as exc:  # noqa: BLE001 - surfaced on the effect, not swallowed
+                effect.status = "failed"
+                effect.result = {"error": str(exc)}
+                failed += 1
+        return executed, failed

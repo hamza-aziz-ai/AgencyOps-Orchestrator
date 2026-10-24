@@ -76,3 +76,18 @@ def test_narrative_contains_no_invented_figures(settings, bundle, engine):
     narrative = s["narrative"]
     assert f"{t['spend']:,.0f}" in narrative
     assert f"{t['roas']:.2f}" in narrative
+
+
+def test_gate_off_write_failure_is_reported(auto_settings, engine, monkeypatch):
+    """A failed auto-dispatch must not read as a clean completion."""
+    from agencyops.connectors import build_bundle
+
+    b = build_bundle(auto_settings)
+
+    def down(effect):
+        raise RuntimeError("slack down")
+
+    monkeypatch.setattr(b.writer("slack"), "execute", down)
+    s = run_report("nova-retail", bundle=b, engine=engine, settings=auto_settings)
+    assert s["effects"][0].status == "failed"
+    assert s["trace"].status == "completed_with_errors"

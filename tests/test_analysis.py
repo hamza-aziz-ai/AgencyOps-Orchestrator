@@ -69,3 +69,16 @@ def test_findings_sorted_high_severity_first():
             mk(cid="2", name="Good", spend=20_000.0, rev=100_000.0)]
     findings = find_signals(cur, prev)
     assert findings[0]["severity"] == "high"
+
+
+@pytest.mark.parametrize(
+    ("conversions", "wording"),
+    [(80, "CPA rose 25% to AED 125"), (125, "CPA fell 20% to AED 80"), (100, "CPA held at AED 100")],
+)
+def test_roas_decline_headline_states_cpa_direction(conversions, wording):
+    """The headline feeds the narrate prompt, so a falling CPA must never read 'rose -20%'."""
+    prev = [mk(spend=10_000.0, conv=100, rev=50_000.0)]
+    cur = [mk(spend=10_000.0, conv=conversions, rev=30_000.0)]
+    decline = next(f for f in find_signals(cur, prev) if f["type"] == "roas_decline")
+    assert wording in decline["headline"]
+    assert "-" not in decline["headline"].split("CPA", 1)[1]

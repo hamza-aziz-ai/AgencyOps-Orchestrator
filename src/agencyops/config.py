@@ -8,9 +8,12 @@ Everything is environment-driven so the same build runs in three modes:
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
+from pydantic import Field, PositiveInt
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+NonEmptyStr = Annotated[str, Field(min_length=1)]
 
 
 class Settings(BaseSettings):
@@ -37,15 +40,20 @@ class Settings(BaseSettings):
     # Connectors
     connector_mode: Literal["mock", "live"] = "mock"
 
+    # Live connectors map our client slugs (and the graphs' symbolic Trello
+    # list names) onto vendor ids, as JSON in the environment. There is no
+    # single-account fallback: an unmapped client fails before any request
+    # rather than reading another client's account.
     meta_access_token: str | None = None
-    meta_ad_account_id: str | None = None
+    meta_ad_accounts: dict[str, NonEmptyStr] = {}
 
     harvest_account_id: str | None = None
     harvest_access_token: str | None = None
+    harvest_client_ids: dict[str, PositiveInt] = {}
 
     trello_key: str | None = None
     trello_token: str | None = None
-    trello_board_id: str | None = None
+    trello_list_ids: dict[str, NonEmptyStr] = {}
 
     slack_bot_token: str | None = None
     slack_default_channel: str = "#client-reporting"

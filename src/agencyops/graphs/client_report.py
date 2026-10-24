@@ -2,10 +2,12 @@
 
     gather -> analyse -> narrate ⇄ verify -> assemble -> propose -> [gate] -> dispatch
 
-Why a graph rather than a linear script: the approval gate is a real
-interrupt. The graph halts with the report drafted and the outbound writes
-staged but unsent, persists that state, and resumes only when a human
-approves. A Zapier chain cannot pause mid-run and survive a restart.
+Why a graph rather than a linear script: the retry loop and the approval
+gate are explicit, inspectable edges. With the gate on, the graph ends at
+`await_approval` with the report drafted and the outbound writes staged but
+unsent. The API keeps that state in the in-memory RunStore, and a human's
+decision releases the effects through `RunStore.decide` - the graph is not
+resumed, there is no checkpointer, and a restart loses pending runs.
 
 Node responsibilities are strictly separated:
   gather   - I/O only, no logic
@@ -34,7 +36,7 @@ from langgraph.graph import END, StateGraph
 
 from ..analysis import aggregate, compare, find_signals
 from ..config import Settings, get_settings
-from ..connectors import ConnectorBundle, build_bundle
+from ..connectors import ConnectorBundle, build_bundle, run_status
 from ..connectors.base import Effect
 from ..llm import LLMEngine, OfflineEngine, build_engine
 from ..observability import RunTrace, timed
@@ -389,18 +391,9 @@ def build_report_graph(
         """The only node with permission to mutate the outside world."""
         trace = state["trace"]
         with timed(trace, "dispatch") as t:
-            executed = 0
-            for effect in state.get("effects", []):
-                if effect.status not in ("proposed", "approved"):
-                    continue
-                try:
-                    effect.result = bundle.writer(effect.connector).execute(effect)
-                    effect.status = "executed"
-                    executed += 1
-                except Exception as exc:  # noqa: BLE001 - surfaced, not swallowed
-                    effect.status = "failed"
-                    effect.result = {"error": str(exc)}
-            t.summary = f"{executed}/{len(state.get('effects', []))} effects executed"
+            effects = state.get("effects", [])
+            executed, failed = bundle.dispatch(effects)
+            t.summary = f"{executed}/{len(effects)} effects executed, {failed} failed"
         return {}
 
     def halt_for_approval(state: ReportState) -> dict[str, Any]:
@@ -640,5 +633,5 @@ def run_report(
         "errors": [],
     }
     result = graph.invoke(initial)
-    trace.finish("blocked_on_approval" if result.get("approval_required") and not result.get("approved") else "completed")
+    trace.finish("failed" if result.get("errors") else run_status(result.get("effects", [])))
     return result
