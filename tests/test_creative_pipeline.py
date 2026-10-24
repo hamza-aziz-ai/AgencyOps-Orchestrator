@@ -122,3 +122,41 @@ def test_offline_revision_truncates_on_word_boundary(engine):
     # every token must be a whole word from the original
     original = "A coached start, not a cold treadmill, without the guesswork"
     assert all(tok in original for tok in headline.split())
+
+
+class _Scripted:
+    """Canned model replies, in order; the last one repeats."""
+
+    name = "scripted"
+
+    def __init__(self, *texts: str) -> None:
+        self._texts, self.calls = list(texts), 0
+
+    def complete(self, task, prompt, context):
+        from agencyops.llm import LLMResponse
+
+        self.calls += 1
+        return LLMResponse(text=self._texts[min(self.calls, len(self._texts)) - 1],
+                           engine=self.name, task=task)
+
+
+@pytest.mark.parametrize("reply", [
+    "[]",
+    '{"x": 1}',
+    '[{"headline": 7, "body": "Shop now for more"}]',
+    '[{"headline": "Hi"}]',
+    '[{"headline": "Hi", "body": 3}]',
+    '["just a string"]',
+])
+def test_malformed_generation_is_a_state_error(settings, bundle, reply):
+    s = run_creative("nova-retail", "Nova Hydrate", "busy professionals", "hydration",
+                     bundle=bundle, engine=_Scripted(reply), settings=settings)
+    assert s["errors"] and not s.get("effects")
+
+
+def test_invalid_revision_keeps_the_original_variant(settings, bundle):
+    failing = '[{"headline": "Cheap hydration", "body": "Shop the cheap set today for all-day hydration."}]'
+    s = run_creative("nova-retail", "Nova Hydrate", "busy professionals", "hydration",
+                     bundle=bundle, engine=_Scripted(failing, '{"headline": 5}', "not json"),
+                     settings=settings)
+    assert [v["headline"] for v in s["rejected_variants"]] == ["Cheap hydration"]

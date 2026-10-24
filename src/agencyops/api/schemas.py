@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -22,8 +22,8 @@ class CreativeRequest(BaseModel):
 
 class DecisionRequest(BaseModel):
     decision: Literal["approve", "reject"]
-    effect_indexes: list[int] | None = Field(
-        None, description="Omit to apply the decision to every staged effect."
+    effect_indexes: list[Annotated[int, Field(ge=0)]] | None = Field(
+        None, min_length=1, description="Omit to apply the decision to every staged effect."
     )
 
 

@@ -83,6 +83,12 @@ def find_signals(
         revenue_delta = row.revenue - old.revenue
 
         if roas_delta <= -MATERIALITY_PCT:
+            if cpa_delta > 0:
+                cpa_move = f"rose {cpa_delta:.0f}% to"
+            elif cpa_delta < 0:
+                cpa_move = f"fell {abs(cpa_delta):.0f}% to"
+            else:
+                cpa_move = "held at"
             findings.append(
                 {
                     "type": "roas_decline",
@@ -90,7 +96,7 @@ def find_signals(
                     "campaign": row.campaign_name,
                     "headline": (
                         f"{row.campaign_name} ROAS fell {abs(roas_delta):.0f}% to "
-                        f"{row.roas:.2f} while CPA rose {cpa_delta:.0f}% to "
+                        f"{row.roas:.2f} while CPA {cpa_move} "
                         f"{row.currency} {row.cpa:,.0f}"
                     ),
                     "impact": abs(revenue_delta),

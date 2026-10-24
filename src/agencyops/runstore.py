@@ -7,11 +7,12 @@ narrow enough that swapping in Redis or Postgres is a single-class change.
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from .connectors import ConnectorBundle
-from .connectors.base import Effect
+from .connectors.base import Effect, run_status
 from .observability import RunTrace
 
 
@@ -24,6 +25,8 @@ class StoredRun:
     trace: RunTrace
     label: str = ""
     artifacts: dict[str, Any] = field(default_factory=dict)
+    # Serialises decisions on this run; see RunStore.decide.
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     @property
     def effects(self) -> list[Effect]:
@@ -85,46 +88,50 @@ class RunStore:
         """Approve or reject staged effects, dispatching the approved ones.
 
         Omitting effect_indexes applies the decision to every proposed effect.
+        Only proposed effects can be decided. The whole request is validated
+        before anything changes, and each run's decisions are serialised, so
+        two concurrent approvals cannot dispatch the same effect twice.
+
+        Raises KeyError (no such run), IndexError (index out of range) or
+        ValueError (bad decision, already-decided target, nothing pending).
         """
+        if decision not in ("approve", "reject"):
+            raise ValueError(f"decision must be 'approve' or 'reject', not {decision!r}")
         run = self.get(run_id)
-        targets = (
-            [run.effects[i] for i in effect_indexes]
-            if effect_indexes is not None
-            else [e for e in run.effects if e.status == "proposed"]
-        )
+        with run.lock:
+            effects = run.effects
+            if effect_indexes is None:
+                indexes = [i for i, e in enumerate(effects) if e.status == "proposed"]
+            else:
+                indexes = list(dict.fromkeys(effect_indexes))
+                if any(not 0 <= i < len(effects) for i in indexes):
+                    raise IndexError("effect_indexes out of range")
+                settled = [i for i in indexes if effects[i].status != "proposed"]
+                if settled:
+                    raise ValueError(f"effect(s) {settled} already decided")
+            targets = [effects[i] for i in indexes]
+            if not targets:
+                raise ValueError("no proposed effects to decide")
 
-        if decision == "reject":
-            for e in targets:
-                e.status = "rejected"
-            run.trace.finish("rejected")
+            started = time.time()
+            if decision == "reject":
+                for e in targets:
+                    e.status = "rejected"
+                dispatched, failed, rejected = 0, 0, len(targets)
+                summary = f"rejected {rejected} effect(s)"
+            else:
+                dispatched, failed = run.bundle.dispatch(targets)
+                rejected = 0
+                summary = f"approved and dispatched {dispatched} effect(s), {failed} failed"
+            run.trace.record(
+                "human_approval",
+                summary,
+                started,
+                decision=decision,
+                effect_indexes=indexes,
+            )
+            run.trace.finish(run_status(effects))
             run.trace.persist()
-            return {"dispatched": 0, "rejected": len(targets)}
-
-        dispatched, failed = 0, 0
-        import time as _time
-
-        started = _time.time()
-        for e in targets:
-            if e.status not in ("proposed", "approved"):
-                continue
-            try:
-                e.result = run.bundle.writer(e.connector).execute(e)
-                e.status = "executed"
-                dispatched += 1
-            except Exception as exc:  # noqa: BLE001
-                e.status = "failed"
-                e.result = {"error": str(exc)}
-                failed += 1
-
-        run.trace.record(
-            "human_approval",
-            f"approved and dispatched {dispatched} effect(s), {failed} failed",
-            started,
-            decision=decision,
-        )
-        run.trace.finish("completed" if not failed else "completed_with_errors")
-        run.trace.persist()
-        return {"dispatched": dispatched, "failed": failed, "rejected": 0}
-
+        return {"dispatched": dispatched, "failed": failed, "rejected": rejected}
 
 STORE = RunStore()

@@ -49,8 +49,7 @@ def main() -> int:
     print(f"  Trello calls made so far: {len(bundle.writer('trello').log)}")
 
     banner("Account lead approves effect 0 only (report yes, action cards no)")
-    report["effects"][0].result = bundle.writer("slack").execute(report["effects"][0])
-    report["effects"][0].status = "executed"
+    bundle.dispatch([report["effects"][0]])
     for i, e in enumerate(report["effects"]):
         print(f"  [{i}] {e.status:<9} {e.render()}")
     print(f"\n  Slack calls made now: {len(bundle.writer('slack').log)}")
