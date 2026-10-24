@@ -1,16 +1,12 @@
 # AgencyOps Orchestrator
 
-Agentic workflow automation for an eCommerce marketing agency — built on
-LangGraph, FastAPI and Ollama (gpt-oss).
+Agentic workflow automation for an eCommerce marketing agency — built on LangGraph, FastAPI and Ollama (gpt-oss).
 
-It automates two recurring agency processes end to end (weekly client
-reporting and creative production), and it does so with a property most
-no-code automation lacks: **nothing reaches a client without a human
-releasing it.**
+It automates two recurring agency processes end to end (weekly client reporting and creative production), and it does so with a property most no-code automation lacks: **nothing reaches a client without a human releasing it.**
 
 ```
 $ python scripts/demo.py          # no API keys required
-$ python -m pytest -q             # 114 passed
+$ python -m pytest -q             # 157 passed
 $ uvicorn agencyops.api.main:app --app-dir src   # console at localhost:8000
 ```
 
@@ -18,8 +14,7 @@ $ uvicorn agencyops.api.main:app --app-dir src   # console at localhost:8000
 
 ## The problem this solves
 
-Marketing agencies automate with Zapier chains: trigger → step → step → send.
-That works until the automation touches a client. Then three things break:
+Marketing agencies automate with Zapier chains: trigger → step → step → send. That works until the automation touches a client. Then three things break:
 
 | Failure | Why it happens | What this does instead |
 |---|---|---|
@@ -27,9 +22,7 @@ That works until the automation touches a client. Then three things break:
 | Off-brand ad copy goes live | Brand rules live in a prompt, enforced by hope | Rules are code. Violations are detected, fed back for revision, and escalated to a human if unfixable. |
 | Nobody can explain what the automation did | Linear chains keep no reviewable state | Every node writes a trace step. Every outbound write is a reviewable object. |
 
-The architectural answer to all three is the same: **separate proposing from
-doing.** Workflows produce `Effect` objects describing intended writes. A
-dispatcher executes them, and only after approval.
+The architectural answer to all three is the same: **separate proposing from doing.** Workflows produce `Effect` objects describing intended writes. A dispatcher executes them, and only after approval.
 
 ---
 
@@ -66,8 +59,7 @@ dispatcher executes them, and only after approval.
 | `propose` | Construct `Effect`s | Execute anything |
 | `dispatch` | Mutate external systems | Anything else |
 
-Constructing an `Effect` cannot cause a side effect — there is a test asserting
-exactly that (`test_effects_are_inert_until_dispatched`).
+Constructing an `Effect` cannot cause a side effect — there is a test asserting exactly that (`test_effects_are_inert_until_dispatched`).
 
 ---
 
@@ -77,11 +69,7 @@ exactly that (`test_effects_are_inert_until_dispatched`).
 gather → analyse → narrate ⇄ verify → assemble → propose → [approval gate] → dispatch
 ```
 
-Pulls Meta Ads performance and Harvest time tracking, computes week-on-week
-deltas, ranks material findings by severity and revenue impact, has the LLM
-write client commentary grounded strictly in those computed figures, checks
-that commentary back against the arithmetic, renders a markdown report, and
-stages a Slack post plus one Trello action card per high-severity finding.
+Pulls Meta Ads performance and Harvest time tracking, computes week-on-week deltas, ranks material findings by severity and revenue impact, has the LLM write client commentary grounded strictly in those computed figures, checks that commentary back against the arithmetic, renders a markdown report, and stages a Slack post plus one Trello action card per high-severity finding.
 
 Sample trace:
 
@@ -96,57 +84,30 @@ run 136b01f06555  [client_report]  status=blocked_on_approval
    7. await_approval      0.0ms  paused - 3 effects awaiting human approval
 ```
 
-**Materiality thresholds** keep the report readable: movements under 10%, or on
-campaigns spending under AED 2,000, are treated as noise and never surface. An
-agency automation that flags everything gets ignored within a fortnight.
+**Materiality thresholds** keep the report readable: movements under 10%, or on campaigns spending under AED 2,000, are treated as noise and never surface. An agency automation that flags everything gets ignored within a fortnight.
 
 ### Checking the prose against the maths
 
-`verify` exists because a prompt cannot make a guarantee. The model is handed
-every figure pre-computed, with the direction and the judgement in separate
-columns, and told to reproduce the signs exactly. It still occasionally printed
-one inverted — a rising cost is bad news, and a minus sign is how prose usually
-signals bad news:
+`verify` exists because a prompt cannot make a guarantee. The model is handed every figure pre-computed, with the direction and the judgement in separate columns, and told to reproduce the signs exactly. It still occasionally printed one inverted — a rising cost is bad news, and a minus sign is how prose usually signals bad news:
 
 > CPA up to AED 70 **(‑16%)** — while the table two lines above says **+16%**
 
-A client who catches the prose and the table disagreeing stops trusting both.
-So the claim is enforced rather than requested. `verify` compares what the
-commentary printed against what `compare()` computed, a disagreement earns one
-retry with the specific violation attached, and copy that still contradicts the
-figures is replaced by the offline engine's templated prose. The trace records
-that it happened and why.
+A client who catches the prose and the table disagreeing stops trusting both. So the claim is enforced rather than requested. `verify` compares what the commentary printed against what `compare()` computed, a disagreement earns one retry with the specific violation attached, and copy that still contradicts the figures is replaced by the offline engine's templated prose. The trace records that it happened and why.
 
 Two checks run, covering both halves of the error:
 
-- **Sign** — an explicit `+`/`−` in front of a magnitude, across every dash
-  variant a model might reach for. The observed failure used U+2011, a
-  non-breaking hyphen an ASCII check would have missed.
-- **Direction** — the verb attached to a metric, for the case the sign check
-  cannot see: *"CPA fell 9.02%"* when it rose.
+- **Sign** — an explicit `+`/`−` in front of a magnitude, across every dash variant a model might reach for. The observed failure used U+2011, a non-breaking hyphen an ASCII check would have missed.
+- **Direction** — the verb attached to a metric, for the case the sign check cannot see: *"CPA fell 9.02%"* when it rose.
 
-The whole design problem is the second one, because attributing a verb to a
-metric is where a checker starts inventing faults. **A gate that cries wolf
-gets switched off, and then it protects nothing.** So every rule abstains
-rather than guesses:
+The whole design problem is the second one, because attributing a verb to a metric is where a checker starts inventing faults. **A gate that cries wolf gets switched off, and then it protects nothing.** So every rule abstains rather than guesses:
 
-- A verb after the metric binds only up to the next metric or clause break, so
-  *"the dip in conversions and the rise in CPA"* is not read as conversions
-  rising.
-- A verb *before* the metric binds only through a preposition — *"the drop in
-  CPA"* counts, bare *"spend rose … but revenue"* does not.
-- Longest alias wins, so *"return on ad spend"* is one mention of ROAS rather
-  than also a mention of spend.
-- Judgement words are excluded outright. A falling CPA is an *improvement*;
-  mapping "improved" onto a direction would make the checker repeat the exact
-  conflation it exists to catch.
-- **A clause is only judged if it cites the account-level figure.** A good
-  report also discusses individual campaigns, and a campaign is free to move
-  opposite to the account it belongs to — reading *"the Ramadan set saw ROAS
-  fall 14%"* as a contradiction would be being wrong about correct prose.
+- A verb after the metric binds only up to the next metric or clause break, so *"the dip in conversions and the rise in CPA"* is not read as conversions rising.
+- A verb *before* the metric binds only through a preposition — *"the drop in CPA"* counts, bare *"spend rose … but revenue"* does not.
+- Longest alias wins, so *"return on ad spend"* is one mention of ROAS rather than also a mention of spend.
+- Judgement words are excluded outright. A falling CPA is an *improvement*; mapping "improved" onto a direction would make the checker repeat the exact conflation it exists to catch.
+- **A clause is only judged if it cites the account-level figure.** A good report also discusses individual campaigns, and a campaign is free to move opposite to the account it belongs to — reading *"the Ramadan set saw ROAS fall 14%"* as a contradiction would be being wrong about correct prose.
 
-Validated against a corpus of real model output, not just synthetic cases:
-zero false positives, while still catching every planted inversion.
+Validated against a corpus of real model output, not just synthetic cases: zero false positives, while still catching every planted inversion.
 
 ---
 
@@ -156,12 +117,7 @@ zero false positives, while still catching every planted inversion.
 load_guidelines → generate → score ⇄ revise → select → propose → [gate] → dispatch
 ```
 
-The interesting part is the bounded revision loop. Generated copy is scored
-against machine-checkable brand rules — banned phrases, character limits,
-required call-to-action, and a coherence heuristic. Failing variants go back to
-the model **with their specific violations attached**, not a vague "try again",
-and are re-scored. After `MAX_REVISION_ROUNDS` the loop exits and unfixable
-copy is escalated to a human rather than retried forever.
+The interesting part is the bounded revision loop. Generated copy is scored against machine-checkable brand rules — banned phrases, character limits, required call-to-action, and a coherence heuristic. Failing variants go back to the model **with their specific violations attached**, not a vague "try again", and are re-scored. After `MAX_REVISION_ROUNDS` the loop exits and unfixable copy is escalated to a human rather than retried forever.
 
 ```
    3. score              2/6 passed brand check
@@ -172,19 +128,13 @@ copy is escalated to a human rather than retried forever.
    8. select             5 approved, 1 rejected after 2 revision round(s)
 ```
 
-The coherence check exists because of a real failure observed while building
-this: a naive find-and-replace fix turned *"cheap, fast and the best price
-ever"* into *"fast and the"* — which passes a banned-phrase check and a
-character count while reading as nonsense. Automated repair needs an automated
-sanity check behind it.
+The coherence check exists because of a real failure observed while building this: a naive find-and-replace fix turned *"cheap, fast and the best price ever"* into *"fast and the"* — which passes a banned-phrase check and a character count while reading as nonsense. Automated repair needs an automated sanity check behind it.
 
 ---
 
 ## The approval gate
 
-`REQUIRE_HUMAN_APPROVAL=true` (the default) makes every workflow halt after
-staging its writes. The run persists; the effects are listed; a human releases
-them — all of them, or a subset.
+`REQUIRE_HUMAN_APPROVAL=true` (the default) makes every workflow halt after staging its writes. The run persists; the effects are listed; a human releases them — all of them, or a subset.
 
 ```bash
 curl -X POST localhost:8000/workflows/client-report -d '{"client":"nova-retail"}'
@@ -195,16 +145,13 @@ curl -X POST localhost:8000/runs/$RUN_ID/decision \
      -d '{"decision":"approve","effect_indexes":[0]}'
 ```
 
-Irreversible effects (a Slack post to a client channel cannot be unsent) are
-flagged as such in the review list.
+Irreversible effects (a Slack post to a client channel cannot be unsent) are flagged as such in the review list.
 
 ---
 
 ## The review console
 
-The gate is only as good as the interface in front of it, and the people using
-it are account leads, not engineers. So the same FastAPI process serves a
-console at `/console/`:
+The gate is only as good as the interface in front of it, and the people using it are account leads, not engineers. So the same FastAPI process serves a console at `/console/`:
 
 | View | What it is for |
 |---|---|
@@ -213,24 +160,11 @@ console at `/console/`:
 | Approvals | The queue — per-effect checkboxes, irreversible writes flagged, release all or part of a run |
 | Run history | Full node-by-node trace, the rendered report, the generated copy with its brand scores |
 
-Plain HTML, CSS and JavaScript — no npm, no bundler, no CDN. That is a
-deliberate constraint rather than a shortcut: the console runs on the same terms
-as the rest of the project (no credentials, no network, one process), and an
-agency's internal team can read and edit it without a toolchain.
+Plain HTML, CSS and JavaScript — no npm, no bundler, no CDN. That is a deliberate constraint rather than a shortcut: the console runs on the same terms as the rest of the project (no credentials, no network, one process), and an agency's internal team can read and edit it without a toolchain.
 
-It is transport, like the API layer. No logic lives in the browser: every figure
-it displays was computed in `analysis.py`, and every status it shows comes from
-the server. A refresh re-reads `/runs`, so the console can never disagree with
-the orchestrator about what was sent.
+It is transport, like the API layer. No logic lives in the browser: every figure it displays was computed in `analysis.py`, and every status it shows comes from the server. A refresh re-reads `/runs`, so the console can never disagree with the orchestrator about what was sent.
 
-**Accessibility** is treated as part of the deliverable, not a polish pass:
-semantic landmarks and a skip link; a heading order that survives an audit;
-labelled controls with an error summary that links to the offending field;
-one polite live region for status rather than toasts that vanish before they can
-be read; focus moved to `<main>` on navigation; a native `<dialog>` for the
-irreversible-send confirmation, so focus trapping and Escape come from the
-platform; status carried by text, never by colour alone; light and dark themes
-both clearing WCAG AA contrast; and `prefers-reduced-motion` honoured.
+**Accessibility** is treated as part of the deliverable, not a polish pass: semantic landmarks and a skip link; a heading order that survives an audit; labelled controls with an error summary that links to the offending field; one polite live region for status rather than toasts that vanish before they can be read; focus moved to `<main>` on navigation; a native `<dialog>` for the irreversible-send confirmation, so focus trapping and Escape come from the platform; status carried by text, never by colour alone; light and dark themes both clearing WCAG AA contrast; and `prefers-reduced-motion` honoured.
 
 ---
 
@@ -241,12 +175,11 @@ pip install -r requirements.txt
 cp .env.example .env          # optional — defaults run fully offline
 
 python scripts/demo.py        # both workflows, narrated
-python -m pytest -q           # 114 tests
+python -m pytest -q           # 157 tests
 uvicorn agencyops.api.main:app --reload --app-dir src
 ```
 
-Then open http://localhost:8000 for the console, or
-http://localhost:8000/docs for the API.
+Then open http://localhost:8000 for the console, or http://localhost:8000/docs for the API.
 
 ### Three run modes, one build
 
@@ -266,25 +199,11 @@ ollama pull gpt-oss:120b-cloud
 echo "LLM_PROVIDER=ollama" >> .env
 ```
 
-Swap `OLLAMA_MODEL` for a tag you have pulled locally (`gpt-oss:20b`) to run
-with no external service at all, or set `LLM_PROVIDER=gemini` with a
-`GEMINI_API_KEY` — both satisfy the same `LLMEngine` protocol and no graph code
-changes.
+Swap `OLLAMA_MODEL` for a tag you have pulled locally (`gpt-oss:20b`) to run with no external service at all, or set `LLM_PROVIDER=gemini` with a `GEMINI_API_KEY` — both satisfy the same `LLMEngine` protocol and no graph code changes.
 
-`auto` deliberately never resolves to Ollama. A daemon happening to run on the
-box is not consent to send client data through it, so pointing the project at a
-provider is always an explicit line in `.env`. The test suite pins itself to
-`offline` at conftest import, so a configured checkout still has a
-deterministic, network-free suite.
+`auto` deliberately never resolves to Ollama. A daemon happening to run on the box is not consent to send client data through it, so pointing the project at a provider is always an explicit line in `.env`. The test suite pins itself to `offline` at conftest import, so a configured checkout still has a deterministic, network-free suite.
 
-The offline LLM engine is not a stub returning filler. It produces genuine,
-data-grounded output for every task the graphs need — which is why the demo
-runs anywhere, the test suite is deterministic, and a provider outage degrades
-reporting to templated prose instead of taking it down. That last part is
-enforced rather than asserted: every remote engine catches its own failures per
-call and falls through to the offline engine, and the trace records which
-engine actually produced the text, so a week of templated commentary is
-diagnosable rather than mysterious.
+The offline LLM engine is not a stub returning filler. It produces genuine, data-grounded output for every task the graphs need — which is why the demo runs anywhere, the test suite is deterministic, and a provider outage degrades reporting to templated prose instead of taking it down. That last part is enforced rather than asserted: every remote engine catches its own failures per call and falls through to the offline engine, and the trace records which engine actually produced the text, so a week of templated commentary is diagnosable rather than mysterious.
 
 ---
 
@@ -322,7 +241,7 @@ src/agencyops/
     creative_pipeline.py  creative workflow with the revision loop
   api/               FastAPI transport layer
     static/          the review console — hand-written HTML, CSS, JS
-tests/               114 tests
+tests/               157 tests
 scripts/demo.py      narrated end-to-end run
 ```
 
@@ -332,19 +251,8 @@ scripts/demo.py      narrated end-to-end run
 
 Honest scope boundaries for a prototype:
 
-- **No durable checkpointer.** Paused runs live in memory. LangGraph's
-  Postgres checkpointer drops into `build_*_graph()` without touching node
-  code — the graphs are already written as pure state transitions.
-- **No auth on the API or the console.** Both assume a trusted network.
-  Production needs workspace-scoped tokens and a signed-in reviewer, since the
-  approval gate is a security boundary and "who released this?" is an audit
-  question the trace cannot currently answer.
-- **The console has no realtime channel.** Workflows run synchronously and the
-  console re-reads `/runs` after every action. Two reviewers working the queue
-  at once would not see each other's decisions until they refreshed.
-- **Live connectors are wired but unexercised.** They implement the same
-  protocols and are covered by the type contracts, not by integration tests
-  against real accounts.
-- **Scoring rules are heuristic, not a trained classifier.** For brand
-  compliance that is the right call — an agency needs to read, edit and trust
-  the rule set, which means it has to stay legible.
+- **No durable checkpointer.** Paused runs live in memory. LangGraph's Postgres checkpointer drops into `build_*_graph()` without touching node code — the graphs are already written as pure state transitions.
+- **No auth on the API or the console.** Both assume a trusted network. Production needs workspace-scoped tokens and a signed-in reviewer, since the approval gate is a security boundary and "who released this?" is an audit question the trace cannot currently answer.
+- **The console has no realtime channel.** Workflows run synchronously and the console re-reads `/runs` after every action. Two reviewers working the queue at once would not see each other's decisions until they refreshed.
+- **Live connectors are wired but unexercised.** They implement the same protocols and are covered by the type contracts, not by integration tests against real accounts.
+- **Scoring rules are heuristic, not a trained classifier.** For brand compliance that is the right call — an agency needs to read, edit and trust the rule set, which means it has to stay legible.
